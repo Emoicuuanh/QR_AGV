@@ -1,0 +1,8 @@
+*build*
+*devel*
+install
+bak
+.catkin_workspace
+.vscode
+!.vscode/settings.json
+# !.vscode/arduino.json

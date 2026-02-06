@@ -1,0 +1,180 @@
+[submodule "src/control_system"]
+	path = src/control_system
+	url = git@gitlab.com:mkac-agv/control_system.git
+[submodule "src/mission_manager"]
+	path = src/mission_manager
+	url = git@gitlab.com:mkac-agv/mission_manager.git
+[submodule "src/agv_msgs"]
+	path = src/agv_msgs
+	url = git@gitlab.com:mkac-agv/agv_msgs.git
+[submodule "src/amr_config"]
+	path = src/amr_config
+	url = git@gitlab.com:mkac-agv/amr_config.git
+[submodule "src/lenet_tape_sensor"]
+	path = src/lenet_tape_sensor
+	url = git@gitlab.com:mkac-agv/lenet_tape_sensor.git
+[submodule "src/arduino_serial"]
+	path = src/arduino_serial
+	url = git@gitlab.com:mkac-agv/arduino_serial.git
+[submodule "src/agv_common_library"]
+	path = src/agv_common_library
+	url = git@gitlab.com:mkac-agv/agv_common_library.git
+[submodule "src/clear_log"]
+	path = src/clear_log
+	url = git@gitlab.com:mkac-agv/clear_log.git
+[submodule "src/agv_tape_config"]
+	path = src/agv_tape_config
+	url = git@gitlab.com:mkac-agv/agv_tape_config.git
+[submodule "src/agv_mongodb"]
+	path = src/agv_mongodb
+	url = git@gitlab.com:mkac-agv/agv_mongodb.git
+[submodule "src/arduino_common_library"]
+	path = src/arduino_common_library
+	url = git@gitlab.com:mkac-agv/arduino_common_library.git
+[submodule "src/moving_control"]
+	path = src/moving_control
+	url = git@gitlab.com:mkac-agv/moving_control.git
+[submodule "src/odometry_calculate"]
+	path = src/odometry_calculate
+	url = git@gitlab.com:mkac-agv/odometry_calculate.git
+# [submodule "src/rfid"]
+# 	path = src/rfid
+# 	url = git@gitlab.com:mkac_agv_dev/rfid.git
+[submodule "src/robot_pose_publisher"]
+	path = src/robot_pose_publisher
+	url = https://github.com/GT-RAIL/robot_pose_publisher
+[submodule "src/safety_msgs"]
+	path = src/safety_msgs
+	url = git@gitlab.com:mkac-agv/safety_msgs.git
+[submodule "src/scan_safety"]
+	path = src/scan_safety
+	url = git@gitlab.com:mkac-agv/scan_safety.git
+[submodule "src/slam_manager"]
+	path = src/slam_manager
+	url = git@gitlab.com:mkac-agv/slam_manager.git
+[submodule "src/std_stamped_msgs"]
+	path = src/std_stamped_msgs
+	url = git@gitlab.com:mkac-agv/std_stamped_msgs.git
+[submodule "src/timed_roslaunch"]
+	path = src/timed_roslaunch
+	url = https://github.com/MoriKen254/timed_roslaunch.git
+# [submodule "src/yujin_ocs"]
+# 	path = src/yujin_ocs
+# 	url = https://github.com/yujinrobot/yujin_ocs
+# [submodule "src/ultra_sonic"]
+# 	path = src/ultra_sonic
+# 	url = git@gitlab.com:mkac-agv/ultra_sonic.git
+[submodule "src/teleop_twist_joy"]
+	path = src/teleop_twist_joy
+	url = https://github.com/ros-teleop/teleop_twist_joy.git
+[submodule "src/agv_arduino"]
+	path = src/agv_arduino
+	url = git@gitlab.com:mkac-agv/agv_arduino.git
+[submodule "src/matehan"]
+	path = src/matehan
+	url = git@gitlab.com:mkac_agv_dev/matehan.git
+[submodule "src/keya_servo"]
+	path = src/keya_servo
+	url = git@gitlab.com:mkac-agv/keya_servo.git
+[submodule "src/yocs_msgs"]
+	path = src/yocs_msgs
+	url = https://github.com/yujinrobot/yocs_msgs.git
+[submodule "src/rosserial_custom"]
+	path = src/rosserial_custom
+	url = git@gitlab.com:mkac_agv_dev/rosserial_custom.git
+[submodule "src/cognex_qr_code"]
+	path = src/cognex_qr_code
+	url = git@gitlab.com:mkac_agv_dev/cognex_qr_code.git
+[submodule "src/joystick_control"]
+	path = src/joystick_control
+	url = git@gitlab.com:mkac_agv_dev/joystick_control.git
+[submodule "src/pointcloud_to_laserscan"]
+	path = src/pointcloud_to_laserscan
+	url = git@gitlab.com:mkac-agv/pointcloud_to_laserscan.git
+[submodule "src/charging_process"]
+	path = src/charging_process
+	url = git@gitlab.com:mkac-agv/charging_process.git
+[submodule "src/docking_charger"]
+	path = src/docking_charger
+	url = git@gitlab.com:mkac_agv_dev/docking_charger.git
+[submodule "src/elevator"]
+	path = src/elevator
+	url = git@gitlab.com:mkac_agv_dev/elevator.git
+[submodule "src/fastech_io"]
+	path = src/fastech_io
+	url = git@gitlab.com:mkac-agv/fastech_io.git
+[submodule "src/joystick_drivers"]
+	path = src/joystick_drivers
+	url = https://github.com/ros-drivers/joystick_drivers
+[submodule "src/led_control"]
+	path = src/led_control
+	url = git@gitlab.com:mkac-agv/led_control.git
+[submodule "src/rosserial"]
+	path = src/rosserial
+	url = https://github.com/ros-drivers/rosserial.git
+[submodule "src/sound_control"]
+	path = src/sound_control
+	url = git@gitlab.com:mkac-agv/sound_control.git
+[submodule "src/scan_merge_safety"]
+	path = src/scan_merge_safety
+	url = git@gitlab.com:mkac_agv_dev/scan_merge_safety.git
+[submodule "src/vl53l5cx"]
+	path = src/vl53l5cx
+	url = git@gitlab.com:mkac_agv_dev/vl53l5cx.git
+# [submodule "src/ira_laser_tools"]
+# 	path = src/ira_laser_tools
+# 	url = https://github.com/iralabdisco/ira_laser_tools.git
+[submodule "src/geometry2"]
+	path = src/geometry2
+	url = git@gitlab.com:mkac-agv/geometry2.git
+[submodule "src/hmi_for_agv_release"]
+	path = src/hmi_for_agv_release
+	url = git@gitlab.com:mkac_agv_dev/hmi_for_agv_release.git
+[submodule "src/ros_entry"]
+	path = src/ros_entry
+	url = git@gitlab.com:mkac_agv_dev/ros_entry.git
+[submodule "src/yujin_ocs"]
+	path = src/yujin_ocs
+	url = https://github.com/yujinrobot/yujin_ocs
+[submodule "src/test_io_agv"]
+	path = src/test_io_agv
+	url = git@gitlab.com:mkac_agv_dev/test_io_agv.git
+[submodule "src/ros_arduino_bridge"]
+	path = src/ros_arduino_bridge
+	url = https://github.com/hbrobotics/ros_arduino_bridge
+[submodule "src/arduino_ros"]
+	path = src/arduino_ros
+	url = git@gitlab.com:mkac-agv/arduino_ros.git
+[submodule "src/neo-local-planner-custom"]
+	path = src/neo-local-planner-custom
+	url = git@gitlab.com:mkac_agv_dev/neo-local-planner-custom.git
+[submodule "src/qr_code_global_planner"]
+	path = src/qr_code_global_planner
+	url = git@gitlab.com:mkac_agv_dev/qr_code_global_planner.git
+[submodule "src/qr_gls621"]
+	path = src/qr_gls621
+	url = git@gitlab.com:mkac_agv_dev/qr_gls621.git
+[submodule "src/qr_localization"]
+	path = src/qr_localization
+	url = git@gitlab.com:mkac_agv_dev/qr_localization.git
+# [submodule "waypoints_global_planner"]
+# 	path = waypoints_global_planner
+# 	url = git@gitlab.com:mkac-agv/waypoints_global_planner.git
+[submodule "src/read_battery"]
+	path = src/read_battery
+	url = git@gitlab.com:mkac_agv_dev/read_battery.git
+[submodule "src/reset_esp"]
+	path = src/reset_esp
+	url = git@gitlab.com:mkac_agv_dev/reset_esp.git
+[submodule "src/qr_label_tracker"]
+	path = src/qr_label_tracker
+	url = git@gitlab.com:mkac_agv_dev/qr_label_tracker.git
+[submodule "src/ar_track_alvar"]
+	path = src/ar_track_alvar
+	url = git@gitlab.com:mkac-agv/ar_track_alvar.git
+[submodule "src/lidar_signal"]
+	path = src/lidar_signal
+	url = git@gitlab.com:mkac_agv_dev/lidar_signal.git
+[submodule "src/lift"]
+	path = src/lift
+	url = git@gitlab.com:mkac_agv_dev/lift.git
