@@ -1,4 +1,5 @@
 import modbus_tcp_passbox
+from pymodbus.client.sync import ModbusTcpClient
 import yaml
 import socket
 import time
@@ -179,8 +180,7 @@ class PassboxAction(object):
         self.wareshare_ip = rospy.get_param("~wareshare_ip", "192.168.1.200")
         self.wareshare_port = rospy.get_param("~wareshare_port", 502)
         rospy.loginfo("Connecting to Wareshare: {}:{}".format(self.wareshare_ip, self.wareshare_port))
-        self.wareshare = socket.socket() 
-        self.wareshare.connect((self.wareshare_ip, self.wareshare_port))
+        self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
 
         self.lift_msg = Int8Stamped()
         self.disable_qr_code_msg = Int8Stamped()
@@ -198,12 +198,22 @@ class PassboxAction(object):
         self.mode_robot = ""
 
     def check_connected(self):
-        return self.plc.is_connected()
+        return self.plc.is_connected() and self.wareshare.is_connected()
+    
+    def read_wareshare(self):
+        self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
+        self.wareshare.connect()
+        rr = self.wareshare.read_discrete_inputs(0, 8, unit=1)
+        if rr.isError():
+            print("Read error:", rr)
+            return None
+        bits = [1 if b else 0 for b in rr.bits[:8]]
+        return bits
 
     def shutdown(self):
-        # self.auto_docking_client.cancel_all_goals()
         if self.check_connected():
             self.plc.close()
+            self.wareshare.close()
         self.dynamic_reconfig_movebase(self.vel_move_base, True)
         self.moving_control_client.cancel_all_goals()
 
@@ -1475,23 +1485,6 @@ class PassboxAction(object):
             self.client_reconfig_movebase.update_configuration(new_config)
             rospy.sleep(0.1)
 
-    def read_data_elevator(self):
-        while True:
-            # try:
-            if 1:
-                if self.print_first:
-                    rospy.loginfo("START THREAD MONITOR IO PLC")
-                    self.print_first = False
-                if self.start_thread:
-                    self.read_value_x()
-                    self.read_value_y()
-                    self.read_value_w_input()
-                    self.read_value_w_output()
-                    self.pub_io()
-            # except Exception as e:
-            #     rospy.logerr(e)
-            sleep(0.1)
-
     def load_config(self):
         try:
             # Server config
@@ -1550,102 +1543,6 @@ class PassboxAction(object):
         except requests.exceptions.RequestException as e:
             rospy.logerr_throttle(10.0, e)
             return False
-
-    def reset(self):
-        rospy.logwarn("Start reset io")
-        if plc.plc_connect_fail:
-            rospy.logwarn("Reset io fail")
-            return False
-        else:
-            counter_check = 0
-            while True:
-                plc.plc_connect_fail = False
-                for i in x_value_address:
-                    plc.write_x(i, [0])
-                    rospy.sleep(0.01)
-                for i in w_value_address_input:
-                    plc.write_w(i, [0])
-                    rospy.sleep(0.01)
-                x_value = self.read_value_x()
-                w_input_value = self.read_value_w_input()
-                total_x = len(x_value_address)
-                total_w_input = len(w_value_address_input)
-                if (
-                    w_input_value == [0] * total_w_input
-                    and x_value == [0] * total_x
-                    and not plc.plc_connect_fail
-                ):
-                    rospy.logwarn("Reset io success")
-                    return True
-                else:
-                    counter_check += 1
-                if counter_check > 3:
-                    rospy.logwarn("Reset io fail")
-                    return False
-                rospy.sleep(1)
-
-    def read_value_x(self):
-        global pre_x_value
-        index = 0
-        for i in x_value_address:
-            value = plc.read_x(i, 1)[0]
-            rospy.sleep(0.01)
-            if pre_x_value[index] != value:
-                rospy.logwarn("Write data  X{} = {} to PLC".format(i, value))
-                pre_x_value[index] = value
-            index += 1
-        return pre_x_value
-
-    def read_value_y(self):
-        global pre_y_value
-        index = 0
-        for i in y_value_address:
-            value = plc.read_y(i, 1)[0]
-            rospy.sleep(0.01)
-            if pre_y_value[index] != value:
-                rospy.logwarn("Read data Y{} = {} from PLC".format(i, value))
-                pre_y_value[index] = value
-            index += 1
-        return pre_y_value
-
-    def read_value_w_input(self):
-        global pre_w_value_input
-        index = 0
-        for i in w_value_address_input:
-            value = plc.read_w(i, 1)[0]
-            rospy.sleep(0.01)
-            if pre_w_value_input[index] != value:
-                rospy.logwarn("Write data W{} = {} to PLC".format(i, value))
-                pre_w_value_input[index] = value
-            index += 1
-        return pre_w_value_input
-
-    def read_value_w_output(self):
-        global pre_w_value_output
-        index = 0
-        for i in w_value_address_output:
-            value = plc.read_w(i, 1)[0]
-            rospy.sleep(0.01)
-            if pre_w_value_output[index] != value:
-                rospy.logwarn("Read data W{} = {} from PLC".format(i, value))
-                pre_w_value_output[index] = value
-            index += 1
-        return pre_w_value_output
-
-    def reset_value_all(self):
-        global pre_x_value, pre_y_value, pre_w_value_input, pre_w_value_output
-        pre_x_value = []
-        pre_y_value = []
-        pre_w_value_input = []
-        pre_w_value_output = []
-        for i in range(len(x_value_address)):
-            pre_x_value.append(0)
-        for i in range(len(y_value_address)):
-            pre_y_value.append(0)
-        for i in range(len(w_value_address_input)):
-            pre_w_value_input.append(0)
-        for i in range(len(w_value_address_output)):
-            pre_w_value_output.append(0)
 
     def pub_io(self):
         sensors_msg_dict = {}

@@ -1,126 +1,85 @@
-#!/usr/bin/env python3
-# -*- coding:utf-8 -*-
-"""
-Test script to debug Wareshare read function
-"""
-import socket
+from pymodbus.client.sync import ModbusTcpClient
 import time
 
-def calculate_crc16(data):
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            if crc & 0x0001:
-                crc = (crc >> 1) ^ 0xA001
-            else:
-                crc >>= 1
-    return crc
+# --- CẤU HÌNH THÔNG SỐ ---
+SERVER_IP = '192.168.1.200'  # Thay bằng IP thực tế của board
+PORT = 502
+UNIT_ID = 1  # Thường là 1 cho Waveshare
+DELAY = 0.1  # Tốc độ phản hồi (0.1 giây mỗi lần quét)
+def read_wareshare():
+    client = ModbusTcpClient(SERVER_IP, port=PORT)
+    client.connect()
+    while True:
+        rr = client.read_discrete_inputs(0, 8, unit=1)
+        if rr.isError():
+            print("Read error:", rr)
+            time.sleep(0.5)
+            continue
+        bits = [1 if b else 0 for b in rr.bits[:8]]
+        print(bits)
+def sync_in_out():
+    # Khởi tạo kết nối
+    client = ModbusTcpClient(SERVER_IP, port=PORT)
+    
+    print(f"Bắt đầu chương trình đồng bộ tại {SERVER_IP}...")
+    print("Nhấn Ctrl+C để dừng chương trình.")
+    
+    previous_input = [None] * 8
+    previous_output = [None] * 8
 
-def test_read():
-    host = '192.168.1.200'
-    port = 502
-    
-    print(f"Connecting to {host}:{port}...")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((host, port))
-    print("✓ Connected!\n")
-    
-    # First, write something to make sure device is responsive
-    print("Step 1: Testing WRITE (turn ON relay 0)...")
-    write_frame = bytearray(12)
-    write_frame[5] = 0x06
-    write_frame[6] = 0x01  # Device address
-    write_frame[7] = 0x05  # Write single coil
-    write_frame[8] = 0x00
-    write_frame[9] = 0x00  # Coil 0
-    write_frame[10] = 0xFF
-    write_frame[11] = 0x00  # ON
-    
-    print(f"  Sending: {' '.join([f'{b:02X}' for b in write_frame])}")
-    sock.send(write_frame)
-    time.sleep(0.5)
-    
-    # Try to read response from write
-    sock.settimeout(1.0)
-    try:
-        response = sock.recv(1024)
-        print(f"  Write response: {' '.join([f'{b:02X}' for b in response])}")
-    except socket.timeout:
-        print("  No response from write (this is OK for some devices)")
-    
-    print("\nStep 2: Testing READ...")
-    
-    # Build read frame
-    read_frame = bytearray(8)
-    read_frame[0] = 0x01  # Device address
-    read_frame[1] = 0x01  # Command: Read relay status
-    read_frame[2] = 0x00  # Start address high
-    read_frame[3] = 0x00  # Start address low
-    read_frame[4] = 0x00  # Count high
-    read_frame[5] = 0x08  # Count low (8 relays)
-    
-    # Calculate CRC
-    crc = calculate_crc16(read_frame[:6])
-    read_frame[6] = crc & 0xFF
-    read_frame[7] = (crc >> 8) & 0xFF
-    
-    print(f"  Sending: {' '.join([f'{b:02X}' for b in read_frame])}")
-    print(f"  Expected: 01 01 00 00 00 08 3D CC")
-    
-    # Flush buffer
-    sock.settimeout(0.1)
-    try:
-        while True:
-            old = sock.recv(1024)
-            if not old:
-                break
-    except socket.timeout:
-        pass
-    
-    # Send read command
-    sock.settimeout(5.0)  # Long timeout
-    sent = sock.send(read_frame)
-    print(f"  Sent {sent} bytes")
-    
-    # Wait for response
-    print("  Waiting for response...")
-    try:
-        response = sock.recv(1024)
-        print(f"\n✓ SUCCESS! Received {len(response)} bytes:")
-        print(f"  Response: {' '.join([f'{b:02X}' for b in response])}")
+    while True:
+
+        try:
+            # 1. Đảm bảo luôn kết nối
+            if not client.connect():
+                print("Mất kết nối! Đang thử kết nối lại...")
+                time.sleep(2)
+                continue
+
+            # 2. Đọc 8 cổng Digital Input (Discrete Inputs)
+            # Tham số: (address=0, count=8, slave/unit=UNIT_ID)
+            input_data = client.read_discrete_inputs(0, 8, unit=UNIT_ID)
+            read_wareshare()
+
+            if not input_data.isError():
+                # Lấy danh sách 8 bit từ đầu vào
+                input_states = input_data.bits[:8]
+                
+                # 3. Ghi trạng thái đó vào 8 Relay (Coils)
+                # Tham số: (address=0, values=danh_sách_bit, slave=UNIT_ID)
+                client.write_coils(address=0, values=input_states, slave=UNIT_ID)
+                
+                # Hiển thị Input thay đổi
+                for i, state in enumerate(input_states):
+                    if state != previous_input[i]:
+                        print(f"[IN{i}]: {'ON' if state else 'OFF'}")
+                        previous_input[i] = state
+                
+                # Hiển thị Output thay đổi
+                output_data = client.read_coils(address=0, count=8, slave=UNIT_ID)
+                if not output_data.isError():
+                    output_states = output_data.bits[:8]
+                    for i, state in enumerate(output_states):
+                        if state != previous_output[i]:
+                            print(f"[OUT{i}]: {'ON' if state else 'OFF'}")
+                            previous_output[i] = state
+                
+            else:
+                print("Lỗi khi đọc dữ liệu từ board.")
+
+        except KeyboardInterrupt:
+            print("\nĐang dừng chương trình...")
+            break
+        except Exception as e:
+            print(f"Lỗi phát sinh: {e}")
+            time.sleep(1)
         
-        # Parse response
-        if len(response) >= 5:
-            device_addr = response[0]
-            command = response[1]
-            byte_count = response[2]
-            status_byte = response[3] if len(response) > 3 else 0
-            
-            print(f"\n  Device Address: 0x{device_addr:02X}")
-            print(f"  Command: 0x{command:02X}")
-            print(f"  Byte Count: {byte_count}")
-            print(f"  Status Byte: 0x{status_byte:02X} = {status_byte:08b}b")
-            print(f"\n  Relay states:")
-            for bit in range(8):
-                state = bool(status_byte & (1 << bit))
-                print(f"    Relay {bit}: {'ON' if state else 'OFF'}")
-        
-    except socket.timeout:
-        print("\n✗ TIMEOUT - No response received")
-        print("\nPossible issues:")
-        print("  1. Device doesn't support read command")
-        print("  2. Wrong device address")
-        print("  3. Device is busy or not ready")
-        print("  4. Need to wait longer after write")
-    
-    sock.close()
-    print("\nConnection closed")
+        # Chờ một khoảng thời gian ngắn trước khi quét lại
+        time.sleep(DELAY)
+
+    client.close()
+    print("Đã đóng kết nối.")
 
 if __name__ == "__main__":
-    try:
-        test_read()
-    except Exception as e:
-        print(f"\nError: {e}")
-        import traceback
-        traceback.print_exc()
+    # sync_in_out()
+    read_wareshare()
