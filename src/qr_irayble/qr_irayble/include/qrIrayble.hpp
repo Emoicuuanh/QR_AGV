@@ -13,7 +13,7 @@ class AgvCodeReader {
 private:
   std::string server_ip_;
   int port_;
-  boost::asio::io_service   ;
+  boost::asio::io_service io_service_;
   boost::asio::ip::tcp::socket socket_;
   
   // Communication parameters

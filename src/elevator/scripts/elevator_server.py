@@ -552,8 +552,8 @@ class ElevatorAction(object):
 
         # Load data from action
         data_dict = json.loads(goal.data)
-        source_floor = int(data_dict["params"]["source_floor"])
-        destination_floor = int(data_dict["params"]["destination_floor"])
+        # source_floor = int(data_dict["params"]["source_floor"])
+        # destination_floor = int(data_dict["params"]["destination_floor"])
         rospy.logwarn(data_dict)
         direction = BACKWARD
         self.enable_safety = True
@@ -562,7 +562,7 @@ class ElevatorAction(object):
             hub_pose_y = data_dict["params"]["position"]["y"]
             waiting_pose_x = data_dict["params"]["waiting_position"]["x"]
             waiting_pose_y = data_dict["params"]["waiting_position"]["y"]
-            self.type = "ELEVATOR"
+            self.type = "PASSBOX"
             self.name = data_dict["params"]["name"]
             self.cell = 0  # data_dict["params"]["cell"]
             self.cart = data_dict["params"]["cart"]
@@ -573,6 +573,9 @@ class ElevatorAction(object):
                         self.enable_safety = False
                 if "Invert" in data_dict["params"]["properties"]:
                     direction = data_dict["params"]["properties"]["invert"]
+
+                if "Non_equal" in data_dict["params"]["properties"]:
+                    self.non_equal = data_dict["params"]["properties"]["Non_equal"]
         except:
             hub_pose_x = data_dict["params"]["position"]["position"]["x"]
             hub_pose_y = data_dict["params"]["position"]["position"]["y"]
@@ -597,7 +600,9 @@ class ElevatorAction(object):
                 waiting_pose_y - hub_pose_y, waiting_pose_x - hub_pose_x
             )
 
-        # Calculate waiting goal
+        # ============================================================
+        # CALCULATE WAITING GOAL
+        # ============================================================
         waiting_goal = StringGoal()
         waiting_pose = self.calculate_pose_offset(
             0,
@@ -615,7 +620,9 @@ class ElevatorAction(object):
             )
         )
 
-        # Calculate docking goal
+        # ============================================================
+        # CALCULATE DOCKING GOAL
+        # ============================================================
         docking_goal = StringGoal()
         docking_pose = self.calculate_pose_offset(
             0,
@@ -636,7 +643,9 @@ class ElevatorAction(object):
             )
         )
 
-        # Calculate undocking goal
+        # ============================================================
+        # CALCULATE UNDOCKING GOAL
+        # ============================================================
         undocking_goal = StringGoal()
         undocking_path_dict["waypoints"][0]["position"] = copy.deepcopy(
             obj_to_dict(docking_pose, return_pose_dict)
@@ -669,67 +678,67 @@ class ElevatorAction(object):
         success = False
         _prev_state = MainState.NONE
         feedback_msg = ""
-        _state_when_pause = MainState.NONE
-        _state_when_error = MainState.NONE
-        _state_when_network_timeout = MainState.NONE
-        _state_when_emg_agv = MainState.NONE
-        _state_bf_error = MainState.NONE
+        # _state_when_pause = MainState.NONE
+        # _state_when_error = MainState.NONE
+        # _state_when_network_timeout = MainState.NONE
+        # _state_when_emg_agv = MainState.NONE
+        # _state_bf_error = MainState.NONE
         self._asm.reset_flag()
         self._asm.action_running = True
-        self.pose_map2robot = None
-        self.safety_job_name = None
-        self.get_first_time_error = True
-        self.retry_get_center_tape = 0
-        self.pose_waitting = None
-        self.step = 0
-        self.cmd_vel_msg = Twist()
-        distance_to_hub = 0
+        # self.pose_map2robot = None
+        # self.safety_job_name = None
+        # self.get_first_time_error = True
+        # self.retry_get_center_tape = 0
+        # self.pose_waitting = None
+        # self.step = 0
+        # self.cmd_vel_msg = Twist()
+        # distance_to_hub = 0
 
-        self.reset_value_all()
+        # self.reset_value_all()
 
-        is_pause_by_elevator = False
-        is_preemted = False
-        is_send_goal_out = False
+        # is_pause_by_elevator = False
+        # is_preemted = False
+        # is_send_goal_out = False
 
-        on_bit = True
-        t1 = datetime.now()
+        # on_bit = True
+        # t1 = datetime.now()
 
-        self.start_thread = False
-        self.print_first = False
+        # self.start_thread = False
+        # self.print_first = False
 
-        time_send_reset_elevator = rospy.get_time()
-        timeout_waiting_elevator_respond = rospy.get_time()
-        begin_check_timeout = True
-        last_reset_action = False
-        couter_connect_error = 0
-        first_check_timout = True
-        begin_time_ok = rospy.get_time()
-        self.is_plc_connect_fail = True
+        # time_send_reset_elevator = rospy.get_time()
+        # timeout_waiting_elevator_respond = rospy.get_time()
+        # begin_check_timeout = True
+        # last_reset_action = False
+        # couter_connect_error = 0
+        # first_check_timout = True
+        # begin_time_ok = rospy.get_time()
+        # self.is_plc_connect_fail = True
         if plc.plc_connect(self.plc_address, self.port):
             rospy.sleep(1)
             rospy.logwarn("connect plc success first time")
         else:
             rospy.logwarn("connect plc false first time")
             #_state = MainState.NETWORK_ERROR
-        first_go_to_waiting = True
-        is_emg_elevator = False
-        last_time_pub_safety_job = rospy.get_time()
-        self.pre_safety_job_name = None
-        self.reset_success_first_time = False
-        self.reset_success_when_cancle = False
+        # first_go_to_waiting = True
+        # is_emg_elevator = False
+        # last_time_pub_safety_job = rospy.get_time()
+        # self.pre_safety_job_name = None
+        # self.reset_success_first_time = False
+        # self.reset_success_when_cancle = False
 
         while not rospy.is_shutdown():
 
-            if plc.plc_connect_fail:
-                # plc.plc_connect_fail = False
-                # couter_connect_error += 1
-                # self.is_plc_connect_fail = True
-                pass
-            else:
-                # begin_time_ok = rospy.get_time()
-                # couter_connect_error = 0
-                # self.is_plc_connect_fail = False
-                pass
+            # if plc.plc_connect_fail:
+            #     # plc.plc_connect_fail = False
+            #     # couter_connect_error += 1
+            #     # self.is_plc_connect_fail = True
+            #     pass
+            # else:
+            #     # begin_time_ok = rospy.get_time()
+            #     # couter_connect_error = 0
+            #     # self.is_plc_connect_fail = False
+            #     pass
             try:
                 if not plc.check_plc_connected() or plc.plc_connect_fail:
                     if first_check_timout:

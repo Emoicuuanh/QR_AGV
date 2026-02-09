@@ -1,5 +1,5 @@
 from datetime import datetime
-import agf_mc_protocol
+import agf_mc_protocol  # Using Modbus TCP wrapper
 import rospy
 
 def main():
@@ -7,8 +7,8 @@ def main():
     rospy.loginfo("Init node " + rospy.get_name())
 
     plc = agf_mc_protocol
-    plc_address = "192.168.3.251"  # "192.168.20.50"
-    port = 504  # 5000
+    plc_address = "192.168.3.250"  # "192.168.20.50"
+    port = 502  # 5000
 
     try:
         plc.plc_connect(plc_address, port)
@@ -24,8 +24,8 @@ def main():
                 rospy.logerr(e)
 
             if not plc.plc_connect_fail:
-                # plc.write_m(1070, [1])
-                print(plc.read_m(1000, 1)[0])
+                plc.write_d(40201, [2])
+                # print(plc.read_w(30200, 1)[0])
             rospy.sleep(0.5)
 
     except KeyboardInterrupt:

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.5)
 project(control_system)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
@@ -16,6 +16,8 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   nav_msgs
   std_msgs
+  agv_common_library
+  safety_msgs
 )
 
 ## System dependencies are found with CMake's conventions

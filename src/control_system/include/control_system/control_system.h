@@ -1,4 +1,4 @@
-#include "common_function.h"  // Placeholder for included scripts and additional code
+#include <agv_common_library/common_function.h>  // Placeholder for included scripts and additional code
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <fstream>
@@ -14,6 +14,7 @@
 #include <std_msgs/Int16.h>
 #include <std_msgs/Int8.h>
 #include <std_msgs/String.h>
+#include <std_msgs/Float32.h>
 #include <std_msgs/UInt32.h>
 #include <std_srvs/Empty.h>
 #include <string>

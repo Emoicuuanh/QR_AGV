@@ -116,7 +116,7 @@ def read_x(register, size=1):
         if plc_connect_fail:
             rospy.sleep(0.05)
             second_check = pymc3e.batchread_bitunits(
-            headdevice="X" + str(register), readsize=size
+            headdevice="X" + str(register), readsize=sizebatchread_bitunits
         )
             if first_check == second_check:
                 return first_check

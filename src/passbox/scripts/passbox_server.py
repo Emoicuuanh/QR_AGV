@@ -1,5 +1,8 @@
 import modbus_tcp_passbox
 import yaml
+import socket
+import time
+
 from common_function import (
     EnumString,
     lockup_pose,
@@ -171,6 +174,13 @@ class PassboxAction(object):
         self.plc_port = rospy.get_param("~plc_port", 502)
         rospy.loginfo("Connecting to PLC: {}:{}".format(self.plc_ip, self.plc_port))
         self.plc = modbus_tcp_passbox.ModbusTcpClient(self.plc_ip, self.plc_port,timeout=3.0)
+
+
+        self.wareshare_ip = rospy.get_param("~wareshare_ip", "192.168.1.200")
+        self.wareshare_port = rospy.get_param("~wareshare_port", 502)
+        rospy.loginfo("Connecting to Wareshare: {}:{}".format(self.wareshare_ip, self.wareshare_port))
+        self.wareshare = socket.socket() 
+        self.wareshare.connect((self.wareshare_ip, self.wareshare_port))
 
         self.lift_msg = Int8Stamped()
         self.disable_qr_code_msg = Int8Stamped()
