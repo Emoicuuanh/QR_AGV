@@ -69,7 +69,8 @@ class MainState(EnumString):
     EMG_PASSBOX = 60
     TIMEOUT_WHEN_WAIT_PASSBOX_ALLOW_MOVE = 70
     NETWORK_ERROR = 71
-    WAIT_RESET_IO = 72
+    REQUEST_OPEN_BARIE = 80
+
 
 class MainStatePlace(EnumString):
     NONE = -1
@@ -303,7 +304,6 @@ class PassboxAction(object):
         while True:
             if self.get_odom():
                 break
-        # self.trans[0], self.trans[1]
         use_server = True
         hub_type = "hub"
         try:
@@ -380,6 +380,8 @@ class PassboxAction(object):
             hub_pose_y = data_dict["params"]["position"]["y"]
             waiting_pose_x = data_dict["params"]["waiting_position"]["x"]
             waiting_pose_y = data_dict["params"]["waiting_position"]["y"]
+            lift_pose_x = data_dict["params"]["lift_position"]["x"]
+            lift_pose_y = data_dict["params"]["lift_position"]["y"]
             self.type = "PASSBOX"
             self.name = data_dict["params"]["name"]
             self.cell = 0  # data_dict["params"]["cell"]
@@ -399,23 +401,19 @@ class PassboxAction(object):
             hub_pose_y = data_dict["params"]["position"]["position"]["y"]
             waiting_pose_x = self.trans[0]
             waiting_pose_y = self.trans[1]
-            self.type = "ELEVATOR"
+            self.type = "PASSBOX"
             self.name = "AGV 01"
             self.cell = 0
             self.cart = "VRACK"
             self.lot = "1"
             use_server = False
-        if use_server:
-            FAKE_QR_CODE = False
-        else:
-            FAKE_QR_CODE = True
         if direction == FORWARD:
             cur_orient = atan2(
-                hub_pose_y - waiting_pose_y, hub_pose_x - waiting_pose_x
+                hub_pose_y - lift_pose_y, hub_pose_x - lift_pose_x
             )
         else:
             cur_orient = atan2(
-                waiting_pose_y - hub_pose_y, waiting_pose_x - hub_pose_x
+                lift_pose_y - hub_pose_y, lift_pose_x - hub_pose_x
             )
 
         # ============================================================
@@ -439,6 +437,26 @@ class PassboxAction(object):
         )
 
         # ============================================================
+        # CALCULATE LIFT GOAL
+        # ============================================================
+        lift_goal = StringGoal()
+        lift_pose = self.calculate_pose_offset(
+            0,
+            lift_pose_x,
+            lift_pose_y,
+            cur_orient,
+        )
+        lift_path_dict["waypoints"][0]["position"] = copy.deepcopy(
+            obj_to_dict(lift_pose, return_pose_dict)
+        )
+        lift_goal.data = json.dumps(lift_path_dict, indent=2)
+        rospy.logwarn(
+            "Lift goal position:\n{}".format(
+                json.dumps(lift_path_dict, indent=2)
+            )
+        )
+
+        # ============================================================
         # CALCULATE DOCKING GOAL
         # ============================================================
         docking_goal = StringGoal()
@@ -449,7 +467,7 @@ class PassboxAction(object):
             cur_orient,
         )
         docking_path_dict["waypoints"][0]["position"] = copy.deepcopy(
-            obj_to_dict(waiting_pose, return_pose_dict)
+            obj_to_dict(lift_pose, return_pose_dict)
         )
         docking_path_dict["waypoints"][1]["position"] = copy.deepcopy(
             obj_to_dict(docking_pose, return_pose_dict)
@@ -470,7 +488,7 @@ class PassboxAction(object):
         )
 
         undocking_path_dict["waypoints"][1]["position"] = copy.deepcopy(
-            obj_to_dict(waiting_pose, return_pose_dict)
+            obj_to_dict(lift_pose, return_pose_dict)
         )
         if "param_test" not in undocking_path_dict:
             undocking_path_dict["param_test"] = {}
@@ -502,11 +520,11 @@ class PassboxAction(object):
         is_preemted = False # Kiểm tra xem server có bị preemted không
         first_check_timeout = True # Check timeout first time with plc
         _state_when_network_timeout = MainState.NONE # Lưu state tại thời điểm timeout trước khi set state mất kết nối plc
-        if plc.plc_connect(self.plc_address, self.port):
+        if self.check_connected():
             rospy.sleep(1)
-            rospy.logwarn("connect plc success first time")
+            rospy.logwarn("connect passbox success first time")
         else:
-            rospy.logwarn("connect plc false first time")
+            rospy.logwarn("connect passbox false first time")
         while not rospy.is_shutdown():
             try:
                 if not self.check_connected():
@@ -583,29 +601,20 @@ class PassboxAction(object):
                 )
                 self.dynamic_reconfig_movebase(vel_docking_hub, False)
                 _state = MainState.SEND_GOTO_WAITING
+            
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED
 
             # ============================================================
             # State: WAIT_RESET_IO
             # ============================================================
-            # Mục đích: Reset tất cả tín hiệu PLC trước khi bắt đầu
-            # Chỉ dùng cho PLACE (đặt hàng) để xóa tín hiệu từ lần trước
-            # TODO: Implement logic retry nếu reset fail
-            # TODO: Thêm timeout để tránh stuck ở state này
             elif _state == MainState.WAIT_RESET_IO:
-                # Gọi hàm reset() để xóa tất cả bit X và W input của PLC
-                # Hàm reset() sẽ:
-                # - Ghi 0 vào tất cả địa chỉ X (x_value_address)
-                # - Ghi 0 vào tất cả địa chỉ W input (w_value_address_input)
-                # - Đọc lại để verify
-                if self.reset():
-                    rospy.logwarn("reset all value x and w input success")
-                    _state = MainState.INIT  # Chuyển sang INIT sau khi reset thành công
-                else:
-                    rospy.logwarn("reset all value x and w input false")
-                    # TODO: Thêm logic xử lý khi reset fail
-                    # - Retry với counter
-                    # - Hoặc chuyển sang state ERROR sau N lần thử
-                
+                _state = MainState.INIT         
 
             # """
             # ..######..########.##....##.########.........######...#######..########..#######.........##......##....###....####.########.####.##....##..######..
@@ -646,24 +655,16 @@ class PassboxAction(object):
             # ============================================================
             # State: GOING_TO_WAITING
             # ============================================================
-            # Mục đích: Chờ AGV di chuyển đến điểm chờ
-            # Xử lý: Thành công, lỗi, timeout, pause
             elif _state == MainState.GOING_TO_WAITING:
-                # TODO: Thiết lập safety job (chưa implement biến first_go_to_waiting)
-                # if self.enable_safety and first_go_to_waiting:
-                #     self.safety_job_name = safety_job_rotation
-                # else:
-                #     self.safety_job_name = ""
-                
-                # --------------------------------------------------------
-                # Kiểm tra thành công
-                # --------------------------------------------------------
+                if self.enable_safety and first_go_to_waiting:
+                    self.safety_job_name = safety_job_rotation
+                else:
+                    self.safety_job_name = ""
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
                     if goal_type == PICK:
-                        _state = MainState.LIFT_MIN_FIRST  # PICK: Hạ jack trước
+                        _state = MainState.LIFT_MIN_FIRST
                     else:
-                        _state = MainState.LIFT_MAX_FIRST  # PLACE: Giữ jack cao
-                
+                        _state = MainState.LIFT_MAX_FIRST
                 # --------------------------------------------------------
                 # Kiểm tra lỗi di chuyển
                 # --------------------------------------------------------
@@ -676,12 +677,10 @@ class PassboxAction(object):
                         "Go to waiting fail: {}".format(
                             GoalStatus.to_string(self.moving_control_result)
                         )
-                    )
-                    # TODO: Implement các biến _state_bf_error, _state_when_error
-                    # _state_bf_error = MainState.SEND_GOTO_WAITING
-                    # _state_when_error = _state
-                    # _state = MainState.MOVING_ERROR
-                
+                    )  
+                    _state = MainState.MOVING_ERROR
+                    _state_bf_error = MainState.SEND_GOTO_WAITING
+                    _state_when_error = _state        
                 # --------------------------------------------------------
                 # Kiểm tra timeout (mất kết nối với moving_control)
                 # --------------------------------------------------------
@@ -690,15 +689,9 @@ class PassboxAction(object):
                     self.send_feedback(
                         self._as, GoalStatus.to_string(GoalStatus.ABORTED)
                     )
-                    # TODO: Implement state MOVING_DISCONNECTED
-                    # _state_bf_error = MainState.SEND_GOTO_WAITING
-                    # _state_when_error = _state
-                    # _state = MainState.MOVING_DISCONNECTED
-                
-                # --------------------------------------------------------
-                # Kiểm tra pause (TODO: implement sau)
-                # --------------------------------------------------------
-                # TODO: Implement logic pause từ elevator và pause thường
+                    _state_bf_error = MainState.SEND_GOTO_WAITING
+                    _state_when_error = _state
+                    _state = MainState.MOVING_DISCONNECTED
                 # if is_pause_by_passbox:
                 #     self._asm.reset_flag()
                 #     self.moving_control_run_pause_pub.publish(
@@ -735,7 +728,6 @@ class PassboxAction(object):
                     self.lift_msg.data = LIFT_DOWN
                     self.pub_lift_cmd.publish(self.lift_msg)
                 if self._asm.pause_req:
-                    # self.moving_control_client.cancel_all_goals()
                     self._asm.reset_flag()
                     self.moving_control_run_pause_pub.publish(
                         StringStamped(stamp=rospy.Time.now(), data="PAUSE")
