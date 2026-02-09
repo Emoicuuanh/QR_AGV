@@ -69,7 +69,12 @@ class MainState(EnumString):
     EMG_PASSBOX = 60
     TIMEOUT_WHEN_WAIT_PASSBOX_ALLOW_MOVE = 70
     NETWORK_ERROR = 71
-    REQUEST_OPEN_BARIE = 80
+    OPEN_BARIE = 81
+    REQUEST_ENTER_LIFT = 82
+    ENTER_LIFT = 83
+    LIFT_AGV = 84
+    PLACE_AGV = 85
+
 
 
 class MainStatePlace(EnumString):
@@ -90,6 +95,15 @@ class MainStatePick(EnumString):
     CHECK_AGV_PICK_COMPLETE = 103
     DONE_CARRY_OUT = 104
     PAUSE = 105
+
+PICK = 1
+PLACE = 0
+ON = 1
+OFF = 0
+LIFT_UP = 1
+LIFT_DOWN = 2
+FORWARD = 1
+BACKWARD = 0
 ######################
 ###PASS_BOX###
 # INPUT PLC, OUTPUT AGV
@@ -105,8 +119,8 @@ emg_passbox = 30203
 ###Bộ nâng hạ###
 # INPUT PLC, OUTPUT AGV
 emg_agv_request = 40001
-pick_agv_request = 40002
-place_agv_request = 40003
+place_agv_request = 40002
+pick_agv_request = 40003
 close_barie_dirty_side = 40004
 open_barie_dirty_side = 40005
 agv_going_passbox = 40006
@@ -651,20 +665,16 @@ class PassboxAction(object):
             # .##....##..##.....##.........##..##..##.#########..##.....##.....##..##..####.##....##.
             # .##....##..##.....##.........##..##..##.##.....##..##.....##.....##..##...###.##....##.
             # ..######....#######..#######..###..###..##.....##.####....##....####.##....##..######..
-            # """
-            # ============================================================
-            # State: GOING_TO_WAITING
-            # ============================================================
+            # ""
+
+            # State: SEND_GOTO_WAITING
             elif _state == MainState.GOING_TO_WAITING:
                 if self.enable_safety and first_go_to_waiting:
                     self.safety_job_name = safety_job_rotation
                 else:
                     self.safety_job_name = ""
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    if goal_type == PICK:
-                        _state = MainState.LIFT_MIN_FIRST
-                    else:
-                        _state = MainState.LIFT_MAX_FIRST
+                    _state = MainState.OPEN_BARIE
                 # --------------------------------------------------------
                 # Kiểm tra lỗi di chuyển
                 # --------------------------------------------------------
@@ -692,21 +702,140 @@ class PassboxAction(object):
                     _state_bf_error = MainState.SEND_GOTO_WAITING
                     _state_when_error = _state
                     _state = MainState.MOVING_DISCONNECTED
-                # if is_pause_by_passbox:
-                #     self._asm.reset_flag()
-                #     self.moving_control_run_pause_pub.publish(
-                #         StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                #     )
-                #     _state_when_error = _state
-                #     _state = MainState.PAUSED_BY_PASSBOX
-                # else:
-                #     if self._asm.pause_req:
-                #         self._asm.reset_flag()
-                #         self.moving_control_run_pause_pub.publish(
-                #             StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                #         )
-                #         _state_when_pause = _state
-                #         _state = MainState.PAUSED
+# ============================================================
+#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
+#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
+#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
+#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
+#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
+#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
+#
+#            STATE: REQUEST_OPEN_BARIE
+#            ACTION: Send command to open barrier
+# ============================================================
+
+            # ============================================================
+            # State: REQUEST_OPEN_BARIE
+            # ============================================================
+            elif _state == MainState.OPEN_BARIE:
+                if self.plc.write_slave(1,open_barie_dirty_side, [1]) == True:
+                    _state = MainState.REQUEST_ENTER_LIFT
+                else:
+                    _state = MainState.NETWORK_ERROR
+
+
+# ============================================================
+#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
+#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
+#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
+#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
+#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
+#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
+#
+#            STATE: REQUEST_OPEN_BARIE
+#            ACTION: Send command to open barrier
+# ============================================================
+
+            # ============================================================
+            # State: REQUEST_OPEN_BARIE
+            # ============================================================
+            elif _state == MainState.REQUEST_ENTER_LIFT:
+                if self.plc.read_slave(1,position_state,1) == 1:
+                    _state = MainState.ENTER_LIFT
+                else:
+                     self.plc.write_slave(1,pick_agv_request, [1])
+
+# ============================================================
+#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
+#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
+#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
+#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
+#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
+#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
+#
+#            STATE: REQUEST_OPEN_BARIE
+#            ACTION: Send command to open barrier
+# ============================================================
+
+            # ============================================================
+            # State: REQUEST_OPEN_BARIE
+            # ============================================================
+            elif _state == MainState.ENTER_LIFT:
+                self.moving_control_client.send_goal(
+                    lift_goal,
+                    feedback_cb=self.moving_control_fb,
+                )
+                self.moving_control_result = -1
+                self.last_moving_control_fb = rospy.get_time()
+                _state = MainState.LIFT_AGV
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED
+
+# ============================================================
+#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
+#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
+#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
+#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
+#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
+#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
+#
+#            STATE: REQUEST_OPEN_BARIE
+#            ACTION: Send command to open barrier
+# ============================================================
+
+            # ============================================================
+            # State: REQUEST_OPEN_BARIE
+            # ============================================================
+            elif _state == MainState.LIFT_AGV:
+                if self.moving_control_result == GoalStatus.SUCCEEDED:
+                    self.plc.write_slave(1,close_barie_dirty_side, [1])
+                    if self.plc.read_slave(1,barie_state, 1) == 1:
+                        self.plc.write_slave(1,pick_agv_request, [1])
+                    if self.plc.read_slave(1,place_or_pick_state, [1]) == 1:     
+                        if goal_type == PICK:
+                            _state = MainState.LIFT_MIN_FIRST
+                        else:
+                            _state = MainState.LIFT_MAX_FIRST
+                # --------------------------------------------------------
+                # Kiểm tra lỗi di chuyển
+                # --------------------------------------------------------
+                elif (
+                    self.moving_control_result != GoalStatus.SUCCEEDED
+                    and self.moving_control_result != GoalStatus.ACTIVE
+                    and self.moving_control_result != -1
+                ) or self.moving_control_error_code != "":
+                    rospy.logerr(
+                        "Go to waiting fail: {}".format(
+                            GoalStatus.to_string(self.moving_control_result)
+                        )
+                    )  
+                    _state = MainState.MOVING_ERROR
+                    _state_bf_error = MainState.ENTER_LIFT
+                    _state_when_error = _state        
+                # --------------------------------------------------------
+                # Kiểm tra timeout (mất kết nối với moving_control)
+                # --------------------------------------------------------
+                if rospy.get_time() - self.last_moving_control_fb >= 5.0:
+                    rospy.logerr("/moving control disconnected!")
+                    self.send_feedback(
+                        self._as, GoalStatus.to_string(GoalStatus.ABORTED)
+                    )
+                    _state_bf_error = MainState.ENTER_LIFT
+                    _state_when_error = _state
+                    _state = MainState.MOVING_DISCONNECTED
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED
+            
 
             # """
             # .##.......####.########.########.........##.....##.####.##....##.........########.####.########...######..########

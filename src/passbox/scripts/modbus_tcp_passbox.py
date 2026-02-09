@@ -12,16 +12,19 @@ def log(slave_id, msg_type, message):
 
 def write_slave(slave_id, start_addr, values):
     global modbus_lock
-    try:
-        with modbus_lock:
-            response = client.write_registers(start_addr, values, unit=slave_id)
-        if response.isError():
-            rospy.logwarn(f"[Slave {slave_id}] Write attempt {attempt+1} failed: {response}")
-            continue # Thử lại vòng lặp kế tiếp
-        else:
-            return True
-    except Exception as e:
-        rospy.logwarn(f"[Slave {slave_id}] Write Exception attempt {attempt+1}: {e}")
+    max_retries = 3  # Thử lại tối đa 3 lần nếu lỗi
+    
+    for attempt in range(max_retries):
+        try:
+            with modbus_lock:
+                response = client.write_registers(start_addr, values, unit=slave_id)
+            if response.isError():
+                rospy.logwarn(f"[Slave {slave_id}] Write attempt {attempt+1} failed: {response}")
+                continue # Thử lại vòng lặp kế tiếp
+            else:
+                return True
+        except Exception as e:
+            rospy.logwarn(f"[Slave {slave_id}] Write Exception attempt {attempt+1}: {e}")
     log(slave_id, "WRITE_ERROR", f"Failed after {max_retries} retries")
     print(f"\033[91m[Slave {slave_id}] WRITE FAILED after retries\033[0m")
     return False
