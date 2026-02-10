@@ -2,7 +2,66 @@ import modbus_tcp_passbox
 from pymodbus.client.sync import ModbusTcpClient
 import yaml
 import socket
+import threading
+from datetime import datetime
+import os
+import sys
+import rospy
+import rospkg
+import tf
+import tf2_ros
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
+import copy
+import actionlib
 import time
+import dynamic_reconfigure.client
+from dynamic_reconfigure.server import Server
+import requests
+from geometry_msgs.msg import (
+    Twist,
+    Pose,
+    PoseStamped,
+    Quaternion,
+    PoseWithCovarianceStamped,
+)
+from nav_msgs.msg import Odometry
+import json
+from std_msgs.msg import Bool, Int16, Int8, String, Float32
+from math import sqrt, pow, pi, sin, cos, atan2, degrees
+from actionlib_msgs.msg import GoalStatus
+from std_stamped_msgs.msg import (
+    StringAction,
+    StringStamped,
+    StringResult,
+    StringFeedback,
+    StringGoal,
+    Int8Stamped,
+    EmptyStamped,
+)
+from std_stamped_msgs.srv import StringService, StringServiceResponse
+from cognex_qr_code.srv import *
+from agv_msgs.msg import ErrorRobotToPath
+
+common_func_dir = os.path.join(
+    rospkg.RosPack().get_path("agv_common_library"), "scripts"
+)
+if not os.path.isdir(common_func_dir):
+    common_func_dir = os.path.join(
+        rospkg.RosPack().get_path("agv_common_library"), "release"
+    )
+sys.path.insert(0, common_func_dir)
+
+agv_mongodb_dir = os.path.join(
+    rospkg.RosPack().get_path("agv_mongodb"), "scripts"
+)
+if not os.path.isdir(agv_mongodb_dir):
+    agv_mongodb_dir = os.path.join(
+        rospkg.RosPack().get_path("agv_mongodb"), "release"
+    )
+sys.path.insert(0, agv_mongodb_dir)
+from mongodb import mongodb, LogLevel, MissionStatus
+from enum import Enum
+from module_manager import ModuleServer, ModuleClient, ModuleStatus
 
 from common_function import (
     EnumString,
@@ -56,12 +115,10 @@ class MainState(EnumString):
     NO_CART = 31
     OPTICAL_SENSOR_ERROR = 32
     EMG_AGV = 33
-    LECH_TAM = 34
     ALIGNMENT_SENSOR = 35
     LIFT_MIN_END = 36
     LIFT_MIN_FIRST = 37
     LIFT_MAX_FIRST = 38
-    UPDATE_CART_ERROR = 44
     UNABLE_PLACE_CART = 47
     WRONG_CART = 48
     PAUSED_BY_PASSBOX = 49
@@ -74,27 +131,8 @@ class MainState(EnumString):
     ENTER_LIFT = 83
     LIFT_AGV = 84
     PLACE_AGV = 85
-
-
-
-class MainStatePlace(EnumString):
-    NONE = -1
-    CHECK_PASSBOX_POSIBLE = 200
-    REQUEST_ENTER_PASSBOX = 201
-    CHECK_ENTER_POSSIBLE = 202
-    CHECK_AGV_PLACE_COMPLETE = 203
-    DONE_CARRY_IN = 204
-    CARRY_IN_POSSIBLE = 205
-
-
-class MainStatePick(EnumString):
-    NONE = -1
-    CHECK_PASSBOX_POSIBLE = 100
-    REQUEST_ENTER_PASSBOX = 101
-    CHECK_ENTER_POSSIBLE = 102
-    CHECK_AGV_PICK_COMPLETE = 103
-    DONE_CARRY_OUT = 104
-    PAUSE = 105
+    REQUEST_ENTER_PASSBOX = 86
+    GO_OUT_TO_WAITINNG = 87
 
 PICK = 1
 PLACE = 0
@@ -161,8 +199,56 @@ class PassboxAction(object):
         rospy.on_shutdown(self.shutdown)
 
         #Publisher
+        self.disable_check_error_qr_code_pub = rospy.Publisher(
+            "/disable_check_error_qr_code", Int8Stamped, queue_size=5
+        )
+        self.status_io_pub = rospy.Publisher(
+            "/status_elevator_io", StringStamped, queue_size=10
+        )
+        self.safety_job_pub = rospy.Publisher(
+            "/safety_job_name", StringStamped, queue_size=5
+        )
+        self.moving_control_run_pause_pub = rospy.Publisher(
+            "/moving_control/run_pause_req", StringStamped, queue_size=5
+        )
+        self.moving_control_reset_error_pub = rospy.Publisher(
+            "/moving_control/reset_error", EmptyStamped, queue_size=5
+        )
         self.pub_lift_cmd = rospy.Publisher(
             "/lift_cart", Int8Stamped, queue_size=10
+        )
+        self.pub_vel = rospy.Publisher(
+            "/retry_docking_cmd_vel", Twist, queue_size=5
+        )
+        self.pub_continue_run = rospy.Publisher(
+            "/request_run_stop", StringStamped, queue_size=10
+        )
+        # Subscriber
+        rospy.Subscriber(
+            "/error_robot_to_path",
+            ErrorRobotToPath,
+            self.error_robot_to_path_cb,
+        )
+        rospy.Subscriber("/odom", Odometry, self.odom_cb)
+        rospy.Subscriber("/standard_io", StringStamped, self.standard_io_cb)
+        rospy.Subscriber(
+            "/moving_control/result",
+            StringResult,
+            self.moving_control_result_cb,
+        )
+        rospy.Subscriber(
+            "/moving_control/module_status",
+            StringStamped,
+            self.moving_control_module_status_cb,
+        )
+        rospy.Subscriber("/robot_status", StringStamped, self.robot_status_cb)
+        # Service client
+        self.get_qr_code = rospy.ServiceProxy("ReadQrCode", QrCode)
+        # dynamic reconfig client
+        self.client_reconfig_movebase = dynamic_reconfigure.client.Client(
+            "/move_base/NeoLocalPlanner",
+            timeout=30,
+            config_callback=self.dynamic_callback,
         )
 
         self._asm = ModuleServer(name)
@@ -176,10 +262,8 @@ class PassboxAction(object):
         self.server_config_file = kwargs["robot_define"]
         self.use_tf2 = False
         self.tf_listener = tf.TransformListener()
-        #
         self.last_moving_control_fb = rospy.get_time()
         self.moving_control_result = -1
-        #
         self.moving_control_error_code = ""
         # Database
         self.emg_status = True
@@ -431,26 +515,6 @@ class PassboxAction(object):
             )
 
         # ============================================================
-        # CALCULATE WAITING GOAL
-        # ============================================================
-        waiting_goal = StringGoal()
-        waiting_pose = self.calculate_pose_offset(
-            0,
-            waiting_pose_x,
-            waiting_pose_y,
-            cur_orient,
-        )
-        waiting_path_dict["waypoints"][0]["position"] = copy.deepcopy(
-            obj_to_dict(waiting_pose, return_pose_dict)
-        )
-        waiting_goal.data = json.dumps(waiting_path_dict, indent=2)
-        rospy.logwarn(
-            "Waiting goal position:\n{}".format(
-                json.dumps(waiting_path_dict, indent=2)
-            )
-        )
-
-        # ============================================================
         # CALCULATE LIFT GOAL
         # ============================================================
         lift_goal = StringGoal()
@@ -467,6 +531,25 @@ class PassboxAction(object):
         rospy.logwarn(
             "Lift goal position:\n{}".format(
                 json.dumps(lift_path_dict, indent=2)
+            )
+        )
+        # ============================================================
+        # CALCULATE WAITING GOAL
+        # ============================================================
+        waiting_goal = StringGoal()
+        waiting_pose = self.calculate_pose_offset(
+            0,
+            waiting_pose_x,
+            waiting_pose_y,
+            cur_orient,
+        )
+        waiting_path_dict["waypoints"][0]["position"] = copy.deepcopy(
+            obj_to_dict(waiting_pose, return_pose_dict)
+        )
+        waiting_goal.data = json.dumps(waiting_path_dict, indent=2)
+        rospy.logwarn(
+            "Waiting goal position:\n{}".format(
+                json.dumps(waiting_path_dict, indent=2)
             )
         )
 
@@ -568,36 +651,6 @@ class PassboxAction(object):
                 hub_pose_x,
                 hub_pose_y,
             )
-
-            # ################################################################
-            # ################################################################
-            # ##                                                            ##
-            # ##           PREEMPT LOGIC - TODO: IMPLEMENT LATER            ##
-            # ##                                                            ##
-            # ################################################################
-            # ################################################################
-            # if (
-            #     self._as.is_preempt_requested()
-            #     or self._asm.reset_action_req
-            #     or is_preemted
-            # ):
-            #     # TODO: Add preempt handling logic here
-            #     pass
-
-            # ################################################################
-            # ################################################################
-            # ##                                                            ##
-            # ##      CHECK MODULE STATUS & EMG - TODO: IMPLEMENT LATER     ##
-            # ##      (Chỉ cần khi passbox có tín hiệu EMG từ PLC)         ##
-            # ##                                                            ##
-            # ################################################################
-            # ################################################################
-            # if self._asm.module_status != ModuleStatus.ERROR:
-            #     self._asm.error_code = ""
-            # if _state != MainState.PAUSED and self._asm.error_code == "":
-            #     self._asm.module_status = ModuleStatus.RUNNING
-            # TODO: Implement logic kiểm tra tín hiệu EMG từ passbox PLC nếu cần
-            
             # """
             # .####.##....##.####.########
             # ..##..###...##..##.....##...
@@ -608,7 +661,7 @@ class PassboxAction(object):
             # .####.##....##.####....##...
             # """
             # """
-            # State:
+            # State: INIT
             if _state == MainState.INIT:
                 self.vel_move_base = rospy.get_param(
                     "/move_base/NeoLocalPlanner/max_vel_x"
@@ -623,6 +676,59 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
+
+            #.....#.#######.#######.#.....#.#######.######..#....#.........#######.######..
+            ##....#.#..........#....#..#..#.#.....#.#.....#.#...#..........#.......#.....#.
+            #.#...#.#..........#....#..#..#.#.....#.#.....#.#..#...........#.......#.....#.
+            #..#..#.#####......#....#..#..#.#.....#.######..###............#####...######..
+            #...#.#.#..........#....#..#..#.#.....#.#...#...#..#...........#.......#...#...
+            #....##.#..........#....#..#..#.#.....#.#....#..#...#..........#.......#....#..
+            #.....#.#######....#.....##.##..#######.#.....#.#....#.........#######.#.....#.
+            elif _state == MainState.NETWORK_ERROR:
+                self._asm.module_status = ModuleStatus.ERROR
+                error_code_convert = "Passbox Disconnected"
+                self._asm.error_code = "/passbox_server: {}".format(
+                    error_code_convert
+                )
+                try:
+                    if self.check_connected():
+                        rospy.logwarn("call close connect to passbox")
+                        if self.shutdown():
+                            rospy.logwarn("Closed connect to passbox")
+                            rospy.sleep(10)
+                            rospy.logerr(
+                                "Connect to passbox error. Retry connect after 5 s ..."
+                            )
+                            self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
+                            self.plc = modbus_tcp_passbox.ModbusTcpClient(self.plc_ip, self.plc_port,timeout=3.0)
+                            rospy.sleep(10)
+                        else:
+                            rospy.sleep(2)
+                    else:
+                        rospy.logerr(
+                            "Connect to passbox error. Retry connect after 5 s ..."
+                        )
+                        self.check_connected()
+                        rospy.sleep(10)
+                except Exception as e:
+                    rospy.logerr(e)
+                if self._asm.reset_error_request:
+                    self._asm.reset_flag()
+                if self.check_connected() and self.mode_robot == "AUTO":
+                    self._asm.reset_flag()
+                    first_check_timeout = True
+                    _state = _state_when_network_timeout
+                    if (
+                        _state_when_network_timeout
+                        == MainState.GOING_TO_OUT_OF_HUB
+                        or _state_when_network_timeout
+                        == MainState.DOCKING_TO_HUB
+                    ):
+                        self.moving_control_run_pause_pub.publish(
+                            StringStamped(stamp=rospy.Time.now(), data="RUN")
+                        )
+                        rospy.sleep(0.1)
+                        self.pub_continue_run.publish(self.data_run)
 
             # ============================================================
             # State: WAIT_RESET_IO
@@ -674,7 +780,10 @@ class PassboxAction(object):
                 else:
                     self.safety_job_name = ""
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    _state = MainState.OPEN_BARIE
+                    if dirty_or_clean:
+                        _state = MainState.OPEN_BARIE
+                    else:
+                        _state = MainState.REQUEST_ENTER_PASSBOX
                 # --------------------------------------------------------
                 # Kiểm tra lỗi di chuyển
                 # --------------------------------------------------------
@@ -702,63 +811,98 @@ class PassboxAction(object):
                     _state_bf_error = MainState.SEND_GOTO_WAITING
                     _state_when_error = _state
                     _state = MainState.MOVING_DISCONNECTED
-# ============================================================
-#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
-#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
-#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
-#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
-#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
-#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
-#
-#            STATE: REQUEST_OPEN_BARIE
-#            ACTION: Send command to open barrier
-# ============================================================
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED
 
-            # ============================================================
-            # State: REQUEST_OPEN_BARIE
-            # ============================================================
+            #.....#.#######.#.....#.###.#.....#..#####..........#######.######..######..
+            ##...##.#.....#.#.....#..#..##....#.#.....#.........#.......#.....#.#.....#.
+            #.#.#.#.#.....#.#.....#..#..#.#...#.#...............#.......#.....#.#.....#.
+            #..#..#.#.....#.#.....#..#..#..#..#.#..####.........#####...######..######..
+            #.....#.#.....#..#...#...#..#...#.#.#.....#.........#.......#...#...#...#...
+            #.....#.#.....#...#.#....#..#....##.#.....#.........#.......#....#..#....#..
+            #.....#.#######....#....###.#.....#..#####..........#######.#.....#.#.....#.
+
+            elif _state == MainState.MOVING_ERROR:
+                self.moving_control_result = -1
+                self._asm.module_status = ModuleStatus.ERROR
+                self._asm.error_code = (
+                    "/passbox_server: {}".format(_state.toString())
+                    + self.moving_control_error_code
+                )
+                self.cmd_vel_msg.angular.z = 0
+                self.cmd_vel_msg.linear.x = 0
+                self.pub_vel.publish(self.cmd_vel_msg)
+                if self._asm.reset_error_request:
+                    self.moving_control_client.cancel_all_goals()
+                    rospy.sleep(0.1)
+                    rospy.logwarn(
+                        "Reset error --> state: {}".format(
+                            _state_bf_error.toString()
+                        )
+                    )
+                    self._asm.reset_flag()
+                    if _state_when_error == MainState.GOING_TO_OUT_OF_HUB:
+                        _state = MainState.SEND_GOTO_OUT_OF_HUB
+                    else:
+                        _state = MainState.SEND_GOTO_WAITING
+                    self.moving_control_error_code = ""
+
+            #.....#.#######.#.....#.###.#.....#..#####..........######..###..#####..
+            ##...##.#.....#.#.....#..#..##....#.#.....#.........#.....#..#..#.....#.
+            #.#.#.#.#.....#.#.....#..#..#.#...#.#...............#.....#..#..#.......
+            #..#..#.#.....#.#.....#..#..#..#..#.#..####.........#.....#..#...#####..
+            #.....#.#.....#..#...#...#..#...#.#.#.....#.........#.....#..#........#.
+            #.....#.#.....#...#.#....#..#....##.#.....#.........#.....#..#..#.....#.
+            #.....#.#######....#....###.#.....#..#####..........######..###..#####..
+
+            elif _state == MainState.MOVING_DISCONNECTED:
+                self._asm.module_status = ModuleStatus.ERROR
+                self._asm.error_code = "/passbox_server: {}".format(
+                    _state.toString()
+                )
+                if self._asm.reset_error_request:
+                    self._asm.reset_flag()
+                    _state = _state_bf_error
+                    self.moving_control_error_code = ""
+
+            #######.######..#######.#.....#.........######.....#....######..###.#######.
+            #.....#.#.....#.#.......##....#.........#.....#...#.#...#.....#..#..#.......
+            #.....#.#.....#.#.......#.#...#.........#.....#..#...#..#.....#..#..#.......
+            #.....#.######..#####...#..#..#.........######..#.....#.######...#..#####...
+            #.....#.#.......#.......#...#.#.........#.....#.#######.#...#....#..#.......
+            #.....#.#.......#.......#....##.........#.....#.#.....#.#....#...#..#.......
+            #######.#.......#######.#.....#.........######..#.....#.#.....#.###.#######.
+            #                STATE: OPEN_BARIE
+            #        ACTION: Send command to open barrier
             elif _state == MainState.OPEN_BARIE:
-                if self.plc.write_slave(1,open_barie_dirty_side, [1]) == True:
+                self.plc.write_slave(1,open_barie_dirty_side, [1])
+                if self.plc.read_slave(1,barie_state, 1) == 2:
                     _state = MainState.REQUEST_ENTER_LIFT
                 else:
                     _state = MainState.NETWORK_ERROR
-
-
-# ============================================================
-#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
-#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
-#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
-#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
-#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
-#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
-#
-#            STATE: REQUEST_OPEN_BARIE
-#            ACTION: Send command to open barrier
-# ============================================================
-
-            # ============================================================
-            # State: REQUEST_OPEN_BARIE
-            # ============================================================
+            #######.#.....#.#######.#######.######.....#.......###.#######.#######.
+            #.......##....#....#....#.......#.....#....#........#..#..........#....
+            #.......#.#...#....#....#.......#.....#....#........#..#..........#....
+            #####...#..#..#....#....#####...######.....#........#..#####......#....
+            #.......#...#.#....#....#.......#...#......#........#..#..........#....
+            #.......#....##....#....#.......#....#.....#........#..#..........#....
+            #######.#.....#....#....#######.#.....#....#######.###.#..........#....
+            #            STATE: REQUEST_ENTER_LIFT
+            #            ACTION: Send command to open barrier
             elif _state == MainState.REQUEST_ENTER_LIFT:
                 if self.plc.read_slave(1,position_state,1) == 1:
                     _state = MainState.ENTER_LIFT
+                    self.plc.write_slave(1,pick_agv_request, [0])
                 else:
                      self.plc.write_slave(1,pick_agv_request, [1])
 
-# ============================================================
-#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
-#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
-#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
-#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
-#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
-#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
-#
-#            STATE: REQUEST_OPEN_BARIE
-#            ACTION: Send command to open barrier
-# ============================================================
-
             # ============================================================
-            # State: REQUEST_OPEN_BARIE
+            # State: ENTER_LIFT
             # ============================================================
             elif _state == MainState.ENTER_LIFT:
                 self.moving_control_client.send_goal(
@@ -775,21 +919,15 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-# ============================================================
-#  ██████╗ ███████╗ ██████╗ ██╗   ██╗███████╗███████╗████████╗
-#  ██╔══██╗██╔════╝██╔═══██╗██║   ██║██╔════╝██╔════╝╚══██╔══╝
-#  ██████╔╝█████╗  ██║   ██║██║   ██║█████╗  ███████╗   ██║   
-#  ██╔══██╗██╔══╝  ██║   ██║██║   ██║██╔══╝  ╚════██║   ██║   
-#  ██║  ██║███████╗╚██████╔╝╚██████╔╝███████╗███████║   ██║   
-#  ╚═╝  ╚═╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝   
-#
-#            STATE: REQUEST_OPEN_BARIE
-#            ACTION: Send command to open barrier
-# ============================================================
-
+            #.......###.#######.#######.......#.....#####..#.....#.
+            #........#..#..........#.........#.#...#.....#.#.....#.
+            #........#..#..........#........#...#..#.......#.....#.
+            #........#..#####......#.......#.....#.#..####.#.....#.
+            #........#..#..........#.......#######.#.....#..#...#..
+            #........#..#..........#.......#.....#.#.....#...#.#...
+            #######.###.#..........#.......#.....#..#####.....#....
             # ============================================================
-            # State: REQUEST_OPEN_BARIE
+            # State: LIFT_AGV
             # ============================================================
             elif _state == MainState.LIFT_AGV:
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
@@ -835,8 +973,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-            
-
             # """
             # .##.......####.########.########.........##.....##.####.##....##.........########.####.########...######..########
             # .##........##..##..........##............###...###..##..###...##.........##........##..##.....##.##....##....##...
@@ -846,12 +982,10 @@ class PassboxAction(object):
             # .##........##..##..........##............##.....##..##..##...###.........##........##..##....##..##....##....##...
             # .########.####.##..........##....#######.##.....##.####.##....##.#######.##.......####.##.....##..######.....##...
             # """
-
-
             # State: LIFT_MIN_FIRST
             elif _state == MainState.LIFT_MIN_FIRST:
                 if self.liftdown_finish:
-                    _state = MainStatePick.REQUEST_ENTER_PASSBOX
+                    _state = MainState.REQUEST_ENTER_PASSBOX
                 else:
                     self.lift_msg.stamp = rospy.Time.now()
                     self.lift_msg.data = LIFT_DOWN
@@ -863,8 +997,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-            
             # """
             # .##.......####.########.########.........##.....##....###....##.....##.........########.####.########...######..########
             # .##........##..##..........##............###...###...##.##....##...##..........##........##..##.....##.##....##....##...
@@ -879,7 +1011,7 @@ class PassboxAction(object):
 
             elif _state == MainState.LIFT_MAX_FIRST:
                 if self.liftup_finish:
-                    _state = MainStatePlace.REQUEST_ENTER_PASSBOX
+                    _state = MainState.REQUEST_ENTER_PASSBOX
                 else:
                     self.lift_msg.stamp = rospy.Time.now()
                     self.lift_msg.data = LIFT_UP
@@ -891,8 +1023,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-
             # """
             # .########..########..#######..##.....##.########..######..########.........########.##....##.########.########.########.........########.....###.....######...######..########...#######..##.....##
             # .##.....##.##.......##.....##.##.....##.##.......##....##....##............##.......###...##....##....##.......##.....##....##.....##...##.##...##....##.##....##.##.....##.##.....##.##.....##
@@ -902,69 +1032,25 @@ class PassboxAction(object):
             # .##....##..##.......##....##..##.....##.##.......##....##....##............##.......##...###....##....##.......##....##.....##.....##.##.....##.##....##.##....##.##.....##.##.....##...##.##..
             # .##.....##.########..#####.##..#######..########..######.....##....#######.########.##....##....##....########.##.....##....########..##.....##..######...######..########...#######.....###...
             # """
-
-            # State: REQUEST_ENTER_PASSBOX (PLACE)
-            elif _state == MainStatePlace.REQUEST_ENTER_PASSBOX:       
-            # ################################################################
-            # ################################################################
-            # ##                                                            ##
-            # ##   REQUEST_ENTER_PASSBOX (PLACE) - TODO: IMPLEMENT LATER    ##
-            # ##                                                            ##
-            # ################################################################
-            # ################################################################
-            # TODO: Implement logic giao tiếp với PLC passbox
-                _state = MainStatePlace.CARRY_IN_POSSIBLE
-
-            elif _state == MainStatePick.REQUEST_ENTER_PASSBOX:
-            # ################################################################
-            # ################################################################
-            # ##                                                            ##
-            # ##   REQUEST_ENTER_PASSBOX (PICK) - TODO: IMPLEMENT LATER     ##
-            # ##                                                            ##
-            # ################################################################
-            # ################################################################
-                _state = MainState.SEND_DOCKING_HUB
+            # State: REQUEST_ENTER_PASSBOX 
+            elif _state == MainState.REQUEST_ENTER_PASSBOX:  
+                if self.dirty_or_clean:     
+                    if self.plc.read_slave(1,done_open_dirty_side,1) != 1:
+                        self.plc.write_slave(1,open_dirty_side,[1])
+                    elif self.plc.read_slave(1,done_open_dirty_side,1) == 1:
+                        _state = MainState.SEND_DOCKING_HUB
+                else: 
+                    if self.plc.read_slave(1,done_open_clean_side,1) != 1:
+                        self.plc.write_slave(1,open_clean_side,[1])
+                    elif self.plc.read_slave(1,done_open_clean_side,1) == 1:
+                        _state = MainState.SEND_DOCKING_HUB
                 if self._asm.pause_req:
-                    # self.moving_control_client.cancel_all_goals()
                     self._asm.reset_flag()
                     self.moving_control_run_pause_pub.publish(
                         StringStamped(stamp=rospy.Time.now(), data="PAUSE")
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-
-
-            # """
-            # ..######.....###....########..########..##....##.........####.##....##.........########...#######...######...######..####.########..##.......########
-            # .##....##...##.##...##.....##.##.....##..##..##...........##..###...##.........##.....##.##.....##.##....##.##....##..##..##.....##.##.......##......
-            # .##........##...##..##.....##.##.....##...####............##..####..##.........##.....##.##.....##.##.......##........##..##.....##.##.......##......
-            # .##.......##.....##.########..########.....##.............##..##.##.##.........########..##.....##..######...######...##..########..##.......######..
-            # .##.......#########.##...##...##...##......##.............##..##..####.........##........##.....##.......##.......##..##..##.....##.##.......##......
-            # .##....##.##.....##.##....##..##....##.....##.............##..##...###.........##........##.....##.##....##.##....##..##..##.....##.##.......##......
-            # ..######..##.....##.##.....##.##.....##....##....#######.####.##....##.#######.##.........#######...######...######..####.########..########.########
-            # """
-
-            # State: CARRY_IN_POSSIBLE (PLACE)
-            elif _state == MainStatePlace.CARRY_IN_POSSIBLE:
-            # ################################################################
-            # ################################################################
-            # ##                                                            ##
-            # ##   CARRY_IN_POSSIBLE (PLACE) - TODO: IMPLEMENT LATER        ##
-            # ##                                                            ##
-            # ################################################################
-            # ################################################################
-                _state = MainState.SEND_DOCKING_HUB
-                if self._asm.pause_req:
-                    # self.moving_control_client.cancel_all_goals()
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-
-
 
             # """
             # ..######..########.##....##.########.........########...#######...######..##....##.####.##....##..######..........##.....##.##.....##.########.
@@ -975,7 +1061,6 @@ class PassboxAction(object):
             # .##....##.##.......##...###.##.....##.........##.....##.##.....##.##....##.##...##...##..##...###.##....##..........##.....##.##.....##.##.....##
             # ..######..########.##....##.########..#######.########...#######...######..##....##.####.##....##..######...#######.##.....##..#######..########.
             # """
-
             # State: SEND_DOCKING_HUB
             elif _state == MainState.SEND_DOCKING_HUB:
                 first_go_to_waiting = False
@@ -994,7 +1079,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
             # """
             # .########...#######...######..##....##.####.##....##..######..
             # .##.....##.##.....##.##....##.##...##...##..###...##.##....##.
@@ -1006,17 +1090,17 @@ class PassboxAction(object):
             # """
             # State: DOCKING_TO_HUB
             elif _state == MainState.DOCKING_TO_HUB:
-                if plc.read_y(autorator_enter_stop, 1)[0]:
-                    self.disable_qr_code_msg.stamp = rospy.Time.now()
-                    self.disable_qr_code_msg.data = 1
-                    self.disable_check_error_qr_code_pub.publish(
-                        self.disable_qr_code_msg
-                    )
-                    self.moving_control_client.cancel_all_goals()
-                    rospy.sleep(2)
-                    _state = MainState.SEND_GOTO_WAITING
-                    is_pause_by_elevator = True
-                    continue
+                # if plc.read_y(autorator_enter_stop, 1)[0]:
+                #     self.disable_qr_code_msg.stamp = rospy.Time.now()
+                #     self.disable_qr_code_msg.data = 1
+                #     self.disable_check_error_qr_code_pub.publish(
+                #         self.disable_qr_code_msg
+                #     )
+                #     self.moving_control_client.cancel_all_goals()
+                #     rospy.sleep(2)
+                #     _state = MainState.SEND_GOTO_WAITING
+                #     is_pause_by_elevator = True
+                #     continue
                 if direction == FORWARD:
                     if self.enable_safety:
                         self.safety_job_name = safety_job_docking_forward
@@ -1092,9 +1176,6 @@ class PassboxAction(object):
                             _state_when_error = _state
                             _state = MainState.COLLISION_POSSIBLE
                             self.moving_control_client.cancel_all_goals()
-                            # self.moving_control_run_pause_pub.publish(
-                            #     StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                            # )
                             continue
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
                     _state = MainState.CHECK_CART
@@ -1129,7 +1210,6 @@ class PassboxAction(object):
                     _state_when_pause = _state
                     _state = MainState.PAUSED
                     continue
-
             # """
             # ..######..##.....##.########..######..##....##..........######.....###....########..########
             # .##....##.##.....##.##.......##....##.##...##..........##....##...##.##...##.....##....##...
@@ -1152,7 +1232,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
             # """
             # .##.......####.########.########.........##.....##....###....##.....##
             # .##........##..##..........##............###...###...##.##....##...##.
@@ -1165,7 +1244,7 @@ class PassboxAction(object):
             # State: LIFT_MAX
             elif _state == MainState.LIFT_MAX:
                 if self.liftup_finish:
-                    if not FAKE_QR_CODE and self.server_config != None:
+                    if self.server_config != None:
                         if self.upDateCart(
                             self.type, self.name, self.cell, "", ""
                         ) and self.upDateCart(
@@ -1174,7 +1253,6 @@ class PassboxAction(object):
                             rospy.sleep(1)
                             _state = MainState.SEND_GOTO_OUT_OF_HUB
                         else:
-                            # _state = MainState.UPDATE_CART_ERROR
                             rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
                     else:
                         rospy.sleep(1)
@@ -1198,7 +1276,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
             # """
             # .##.......####.########.########.........##.....##.####.##....##
             # .##........##..##..........##............###...###..##..###...##
@@ -1211,14 +1288,13 @@ class PassboxAction(object):
             # State: LIFT_MIN
             elif _state == MainState.LIFT_MIN:
                 if self.liftdown_finish:
-                    if not FAKE_QR_CODE and self.server_config != None:
+                    if self.server_config != None:
                         if self.upDateCart(
                             self.type, self.name, self.cell, self.cart, self.lot
                         ) and self.upDateCart("AGV", self.data, 0, "", ""):
                             rospy.sleep(1)
                             _state = MainState.SEND_GOTO_OUT_OF_HUB
                         else:
-                            # _state = MainState.UPDATE_CART_ERROR
                             rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
                     else:
                         rospy.sleep(1)
@@ -1235,91 +1311,13 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-
-            # """
-            # .##.......####.########.########.........##.....##....###....##.....##
-            # .##........##..##..........##............###...###...##.##....##...##.
-            # .##........##..##..........##............####.####..##...##....##.##..
-            # .##........##..######......##............##.###.##.##.....##....###...
-            # .##........##..##..........##............##.....##.#########...##.##..
-            # .##........##..##..........##............##.....##.##.....##..##...##.
-            # .########.####.##..........##....#######.##.....##.##.....##.##.....##
-            # """
-            # State: LIFT_MAX
-            elif _state == MainState.LIFT_MAX:
-                if self.liftup_finish:
-                    if not FAKE_QR_CODE and self.server_config != None:
-                        if self.upDateCart(
-                            self.type, self.name, self.cell, "", ""
-                        ) and self.upDateCart(
-                            "AGV", self.data, 0, self.cart, self.lot
-                        ):
-                            rospy.sleep(1)
-                            _state = MainState.SEND_GOTO_OUT_OF_HUB
-                        else:
-                            # _state = MainState.UPDATE_CART_ERROR
-                            rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
-                    else:
-                        rospy.sleep(1)
-                        _state = MainState.SEND_GOTO_OUT_OF_HUB
-                    if self.lot == "":
-                        self.db.saveStatusCartData(
-                            "status_cart", "have_empty_cart"
-                        )
-                    else:
-                        self.db.saveStatusCartData(
-                            "status_cart", "have_full_cart"
-                        )
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_UP
-                    self.pub_lift_cmd.publish(self.lift_msg)
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-
-            # """
-            # .##.......####.########.########.........##.....##.####.##....##
-            # .##........##..##..........##............###...###..##..###...##
-            # .##........##..##..........##............####.####..##..####..##
-            # .##........##..######......##............##.###.##..##..##.##.##
-            # .##........##..##..........##............##.....##..##..##..####
-            # .##........##..##..........##............##.....##..##..##...###
-            # .########.####.##..........##....#######.##.....##.####.##....##
-            # """
-            # State: LIFT_MIN
-            elif _state == MainState.LIFT_MIN:
-                if self.liftdown_finish:
-                    if not FAKE_QR_CODE and self.server_config != None:
-                        if self.upDateCart(
-                            self.type, self.name, self.cell, self.cart, self.lot
-                        ) and self.upDateCart("AGV", self.data, 0, "", ""):
-                            rospy.sleep(1)
-                            _state = MainState.SEND_GOTO_OUT_OF_HUB
-                        else:
-                            # _state = MainState.UPDATE_CART_ERROR
-                            rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
-                    else:
-                        rospy.sleep(1)
-                        _state = MainState.SEND_GOTO_OUT_OF_HUB
-                    self.db.saveStatusCartData("status_cart", "no_cart")
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_DOWN
-                    self.pub_lift_cmd.publish(self.lift_msg)
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-
+ #####..#######.#.....#.######......#####..#######....#######.#.....#.#######.
+#.....#.#.......##....#.#.....#....#.....#.#.....#....#.....#.#.....#....#....
+#.......#.......#.#...#.#.....#....#.......#.....#....#.....#.#.....#....#....
+ #####..#####...#..#..#.#.....#....#..####.#.....#....#.....#.#.....#....#....
+      #.#.......#...#.#.#.....#....#.....#.#.....#....#.....#.#.....#....#....
+#.....#.#.......#....##.#.....#....#.....#.#.....#....#.....#.#.....#....#....
+ #####..#######.#.....#.######......#####..#######....#######..#####.....#....
             # State: SEND_GOTO_OUT_OF_HUB
             elif _state == MainState.SEND_GOTO_OUT_OF_HUB:
                 is_send_goal_out = True
@@ -1375,7 +1373,10 @@ class PassboxAction(object):
                             continue
 
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    _state = MainState.DONE
+                    if dirty_or_clean:
+                        _state = Main_State.PLACE_AGV
+                    else:
+                        _state = MainState.DONE
                 elif (
                     self.moving_control_result != GoalStatus.SUCCEEDED
                     and self.moving_control_result != GoalStatus.ACTIVE
@@ -1404,6 +1405,52 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
+            ######..#..........#.....#####..#######.......#.....#####..#.....#.
+            #.....#.#.........#.#...#.....#.#............#.#...#.....#.#.....#.
+            #.....#.#........#...#..#.......#...........#...#..#.......#.....#.
+            ######..#.......#.....#.#.......#####......#.....#.#..####.#.....#.
+            #.......#.......#######.#.......#..........#######.#.....#..#...#..
+            #.......#.......#.....#.#.....#.#..........#.....#.#.....#...#.#...
+            #.......#######.#.....#..#####..#######....#.....#..#####.....#....
+            # State: PLACE_AGV 
+            elif _state == MainState.PLACE_AGV:
+                self.plc.write_slave(1,place_agv_request,[1])
+                if self.plc.read_slave(1,place_or_pick_state,1) == 1:
+                    self.plc.write_slave(1,open_barie_dirty_side, [1])
+                if self.plc.read_slave(1,barie_state, 1) == 2:
+                    _state = MainState.GO_OUT_TO_WAITINNG
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED  
+             #####..#######....#######.#.....#.#######.
+            #.....#.#.....#....#.....#.#.....#....#....
+            #.......#.....#....#.....#.#.....#....#....
+            #..####.#.....#....#.....#.#.....#....#....
+            #.....#.#.....#....#.....#.#.....#....#....
+            #.....#.#.....#....#.....#.#.....#....#....
+             #####..#######....#######..#####.....#....
+
+                        # State: GO_OUT_TO_WAITINNG 
+            elif _state == MainState.GO_OUT_TO_WAITINNG:
+                self.moving_control_client.send_goal(
+                    waiting_goal,
+                    feedback_cb=self.moving_control_fb,
+                )
+                self.moving_control_result = -1
+                self.last_moving_control_fb = rospy.get_time()
+                _state = MainState.DONE
+                if self._asm.pause_req:
+                    self._asm.reset_flag()
+                    self.moving_control_run_pause_pub.publish(
+                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
+                    )
+                    _state_when_pause = _state
+                    _state = MainState.PAUSED
+
 
             # """
             # .########...#######..##....##.########
@@ -1418,163 +1465,8 @@ class PassboxAction(object):
             elif _state == MainState.DONE:
                 self.dynamic_reconfig_movebase(self.vel_move_base, True)
                 if goal_type == PLACE:
-                    # [1040, 1041, 1042]
-                    plc.write_x(carry_in_completed[source_floor - 1], [1])
-                    if (
-                        plc.read_x(carry_in_completed[source_floor - 1], 1)[0]
-                        != 1
-                    ):
-                        rospy.logerr(
-                            "Checking for carry_in_completed x: {} to write to PLC".format(
-                                carry_in_completed[source_floor - 1]
-                            )
-                        )
-                    else:
-                        if not plc.plc_connect_fail:
-                            if (
-                                plc.read_w(15, 1)[0] and plc.read_y(1004, 1)[0]
-                            ) or self.resetTimeoutError:
-                                self.resetTimeoutError = False
-                                t = datetime.now()
-                                _state = MainStatePlace.DONE_CARRY_IN
-                            else:
-                                rospy.logerr(
-                                    "wait for read_w(15, 1) and plc.read_y(1004, 1)"
-                                )
-                                if begin_check_timeout:
-                                    timeout_waiting_elevator_respond = (
-                                        rospy.get_time()
-                                    )
-                                    begin_check_timeout = False
-                                else:
-                                    if (
-                                        rospy.get_time()
-                                        - timeout_waiting_elevator_respond
-                                        > 30
-                                    ):
-                                        _state_when_error = _state
-                                        _state = (
-                                            MainState.TIMEOUT_WHEN_WAIT_ELEVATOR_ALLOW_MOVE
-                                        )
+
                 elif goal_type == PICK:
-                    # [1060, 1061, 1062]
-                    plc.write_x(
-                        carry_out_completion[destination_floor - 1], [1]
-                    )
-                    if (
-                        plc.read_x(
-                            carry_out_completion[destination_floor - 1], 1
-                        )[0]
-                        != 1
-                    ):
-                        rospy.logerr(
-                            "Checking for carry_out_completion x: {} to write to PLC".format(
-                                carry_out_completion[destination_floor - 1]
-                            )
-                        )
-                    else:
-                        # [1080, 1081, 1082]
-                        if not plc.plc_connect_fail:
-                            if (
-                                plc.read_y(
-                                    completion_ACK[destination_floor - 1], 1
-                                )[0]
-                                or self.resetTimeoutError
-                            ):
-                                self.resetTimeoutError = False
-                                t = datetime.now()
-                                _state = MainStatePick.DONE_CARRY_OUT
-                            else:
-                                rospy.logerr(
-                                    "wait for read_y: {}".format(
-                                        completion_ACK[destination_floor - 1]
-                                    )
-                                )
-                                if begin_check_timeout:
-                                    timeout_waiting_elevator_respond = (
-                                        rospy.get_time()
-                                    )
-                                    begin_check_timeout = False
-                                else:
-                                    if (
-                                        rospy.get_time()
-                                        - timeout_waiting_elevator_respond
-                                        > 30
-                                    ):
-                                        _state_when_error = _state
-                                        _state = (
-                                            MainState.TIMEOUT_WHEN_WAIT_ELEVATOR_ALLOW_MOVE
-                                        )
-
-            # """
-            # .########...#######..##....##.########.........######.....###....########..########..##....##.........####.##....##
-            # .##.....##.##.....##.###...##.##..............##....##...##.##...##.....##.##.....##..##..##...........##..###...##
-            # .##.....##.##.....##.####..##.##..............##........##...##..##.....##.##.....##...####............##..####..##
-            # .##.....##.##.....##.##.##.##.######..........##.......##.....##.########..########.....##.............##..##.##.##
-            # .##.....##.##.....##.##..####.##..............##.......#########.##...##...##...##......##.............##..##..####
-            # .##.....##.##.....##.##...###.##..............##....##.##.....##.##....##..##....##.....##.............##..##...###
-            # .########...#######..##....##.########.........######..##.....##.##.....##.##.....##....##....#######.####.##....##
-            # """
-            # State: DONE_CARRY_IN (PLACE)
-            elif _state == MainStatePlace.DONE_CARRY_IN:
-                # [1040, 1041, 1042]
-                plc.write_x(carry_in_completed[source_floor - 1], [0])
-                rospy.sleep(0.5)
-                # [100, 102, 104]
-                plc.write_w(destination_ST_indication[source_floor - 1], [0])
-                plc.write_w(
-                    destination_ST_indication[source_floor - 1] + 1, [0]
-                )
-                # [120, 121, 122]
-                plc.write_w(carry_in_ID[source_floor - 1], [0])
-                # [1030, 1031, 1032]
-                plc.write_x(carry_in_request[source_floor - 1], [0])
-                # plc.write_x(request_door_open[source_floor - 1], [0])
-                if (
-                    plc.read_x(carry_in_completed[source_floor - 1], 1)[0] == 0
-                    and plc.read_w(
-                        destination_ST_indication[source_floor - 1], 1
-                    )[0]
-                    == 0
-                    and plc.read_w(
-                        destination_ST_indication[source_floor - 1] + 1, 1
-                    )[0]
-                    == 0
-                    and plc.read_w(carry_in_ID[source_floor - 1], 1)[0] == 0
-                    and plc.read_x(carry_in_request[source_floor - 1], 1)[0]
-                    == 0
-                ):
-                    if not plc.plc_connect_fail:
-                        success = True
-                        break
-
-            # """
-            # .########...#######..##....##.########.........######.....###....########..########..##....##..........#######..##.....##.########
-            # .##.....##.##.....##.###...##.##..............##....##...##.##...##.....##.##.....##..##..##..........##.....##.##.....##....##...
-            # .##.....##.##.....##.####..##.##..............##........##...##..##.....##.##.....##...####...........##.....##.##.....##....##...
-            # .##.....##.##.....##.##.##.##.######..........##.......##.....##.########..########.....##.............##.....##.##.....##....##...
-            # .##.....##.##.....##.##..####.##..............##.......#########.##...##...##...##......##.............##.....##.##.....##....##...
-            # .##.....##.##.....##.##...###.##..............##....##.##.....##.##....##..##....##.....##.............##.....##.##.....##....##...
-            # .########...#######..##....##.########.........######..##.....##.##.....##.##.....##....##....#######..#######...#######.....##...
-            # """
-            # State: DONE_CARRY_OUT (PICK)
-            elif _state == MainStatePick.DONE_CARRY_OUT:
-                # [1050, 1051, 1052]
-                plc.write_x(carry_out_request[destination_floor - 1], [0])
-                # [1060, 1061, 1062]
-                plc.write_x(carry_out_completion[destination_floor - 1], [0])
-                if (
-                    plc.read_x(carry_out_request[destination_floor - 1], 1)[0]
-                    == 0
-                    and plc.read_x(
-                        carry_out_completion[destination_floor - 1], 1
-                    )[0]
-                    == 0
-                ):
-                    if not plc.plc_connect_fail:
-                        success = True
-                        break
-
         rospy.logwarn("Close connect to plc")
         if plc.plc_close():
             rospy.logwarn("Closed connect to plc when finish")
