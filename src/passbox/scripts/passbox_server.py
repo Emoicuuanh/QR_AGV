@@ -1090,17 +1090,6 @@ class PassboxAction(object):
             # """
             # State: DOCKING_TO_HUB
             elif _state == MainState.DOCKING_TO_HUB:
-                # if plc.read_y(autorator_enter_stop, 1)[0]:
-                #     self.disable_qr_code_msg.stamp = rospy.Time.now()
-                #     self.disable_qr_code_msg.data = 1
-                #     self.disable_check_error_qr_code_pub.publish(
-                #         self.disable_qr_code_msg
-                #     )
-                #     self.moving_control_client.cancel_all_goals()
-                #     rospy.sleep(2)
-                #     _state = MainState.SEND_GOTO_WAITING
-                #     is_pause_by_elevator = True
-                #     continue
                 if direction == FORWARD:
                     if self.enable_safety:
                         self.safety_job_name = safety_job_docking_forward
