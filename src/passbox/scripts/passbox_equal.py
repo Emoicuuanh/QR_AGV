@@ -808,10 +808,7 @@ class PassboxAction(object):
                 else:
                     self.safety_job_name = ""
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    if dirty_or_clean:
-                        _state = MainState.OPEN_BARIE
-                    else:
-                        _state = MainState.REQUEST_ENTER_PASSBOX
+                    _state = MainState.REQUEST_ENTER_PASSBOX
                 # --------------------------------------------------------
                 # Kiểm tra lỗi di chuyển
                 # --------------------------------------------------------
@@ -898,112 +895,6 @@ class PassboxAction(object):
                     _state = _state_bf_error
                     self.moving_control_error_code = ""
 
-            #######.######..#######.#.....#.........######.....#....######..###.#######.
-            #.....#.#.....#.#.......##....#.........#.....#...#.#...#.....#..#..#.......
-            #.....#.#.....#.#.......#.#...#.........#.....#..#...#..#.....#..#..#.......
-            #.....#.######..#####...#..#..#.........######..#.....#.######...#..#####...
-            #.....#.#.......#.......#...#.#.........#.....#.#######.#...#....#..#.......
-            #.....#.#.......#.......#....##.........#.....#.#.....#.#....#...#..#.......
-            #######.#.......#######.#.....#.........######..#.....#.#.....#.###.#######.
-            #                STATE: OPEN_BARIE
-            #        ACTION: Send command to open barrier
-            elif _state == MainState.OPEN_BARIE:
-                self.plc.write_slave(1,open_barie_dirty_side, [1])
-                if self.plc.write_slave(1,open_barie_dirty_side, [1]) == False:
-                    _state = MainState.NETWORK_ERROR
-                if self.plc.read_slave(1,barie_state, 1) == 2:
-                    _state = MainState.REQUEST_ENTER_LIFT
-            #######.#.....#.#######.#######.######.....#.......###.#######.#######.
-            #.......##....#....#....#.......#.....#....#........#..#..........#....
-            #.......#.#...#....#....#.......#.....#....#........#..#..........#....
-            #####...#..#..#....#....#####...######.....#........#..#####......#....
-            #.......#...#.#....#....#.......#...#......#........#..#..........#....
-            #.......#....##....#....#.......#....#.....#........#..#..........#....
-            #######.#.....#....#....#######.#.....#....#######.###.#..........#....
-            #            STATE: REQUEST_ENTER_LIFT
-            #            ACTION: Send command to open barrier
-            elif _state == MainState.REQUEST_ENTER_LIFT:
-                if self.plc.read_slave(1,position_state,1) == 1:
-                    _state = MainState.ENTER_LIFT
-                    time.sleep(2)
-                else:
-                    self.plc.write_slave(1,place_agv_request, [1])
-            # ============================================================
-            # State: ENTER_LIFT
-            # ============================================================
-            elif _state == MainState.ENTER_LIFT:
-                self.moving_control_client.send_goal(
-                    lift_goal,
-                    feedback_cb=self.moving_control_fb,
-                )
-                self.moving_control_result = -1
-                self.last_moving_control_fb = rospy.get_time()
-                _state = MainState.LIFT_AGV
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            #.......###.#######.#######.......#.....#####..#.....#.
-            #........#..#..........#.........#.#...#.....#.#.....#.
-            #........#..#..........#........#...#..#.......#.....#.
-            #........#..#####......#.......#.....#.#..####.#.....#.
-            #........#..#..........#.......#######.#.....#..#...#..
-            #........#..#..........#.......#.....#.#.....#...#.#...
-            #######.###.#..........#.......#.....#..#####.....#....
-            # ============================================================
-            # State: LIFT_AGV
-            # ============================================================
-            elif _state == MainState.LIFT_AGV:
-                if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    self.plc.write_slave(1,close_barie_dirty_side, [1])
-                    if self.plc.write_slave(1,close_barie_dirty_side, [1]) == False:
-                        _state = MainState.NETWORK_ERROR
-                    if self.plc.read_slave(1,barie_state, 1) == 1:
-                        self.plc.write_slave(1,pick_agv_request, [1])
-                        if self.plc.write_slave(1,pick_agv_request, [1]) == False:
-                            _state = MainState.NETWORK_ERROR
-                    if self.plc.read_slave(1,place_or_pick_state, [1]) == 1:     
-                        if goal_type == PICK:
-                            _state = MainState.LIFT_MIN_FIRST
-                        else:
-                            _state = MainState.LIFT_MAX_FIRST
-                # --------------------------------------------------------
-                # Kiểm tra lỗi di chuyển
-                # --------------------------------------------------------
-                elif (
-                    self.moving_control_result != GoalStatus.SUCCEEDED
-                    and self.moving_control_result != GoalStatus.ACTIVE
-                    and self.moving_control_result != -1
-                ) or self.moving_control_error_code != "":
-                    rospy.logerr(
-                        "Go to waiting fail: {}".format(
-                            GoalStatus.to_string(self.moving_control_result)
-                        )
-                    )  
-                    _state = MainState.MOVING_ERROR
-                    _state_bf_error = MainState.ENTER_LIFT
-                    _state_when_error = _state        
-                # --------------------------------------------------------
-                # Kiểm tra timeout (mất kết nối với moving_control)
-                # --------------------------------------------------------
-                if rospy.get_time() - self.last_moving_control_fb >= 5.0:
-                    rospy.logerr("/moving control disconnected!")
-                    self.send_feedback(
-                        self._as, GoalStatus.to_string(GoalStatus.ABORTED)
-                    )
-                    _state_bf_error = MainState.ENTER_LIFT
-                    _state_when_error = _state
-                    _state = MainState.MOVING_DISCONNECTED
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
             # """
             # .##.......####.########.########.........##.....##.####.##....##.........########.####.########...######..########
             # .##........##..##..........##............###...###..##..###...##.........##........##..##.....##.##....##....##...
