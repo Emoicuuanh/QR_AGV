@@ -281,10 +281,10 @@ class PassboxAction(object):
         rospy.loginfo("Connecting to PLC: {}:{}".format(self.plc_ip, self.plc_port))
         self.plc = modbus_tcp_passbox.ModbusTcpClient(self.plc_ip, self.plc_port,timeout=3.0)
 
-        self.wareshare_ip = rospy.get_param("~wareshare_ip", "192.168.1.200")
-        self.wareshare_port = rospy.get_param("~wareshare_port", 502)
-        rospy.loginfo("Connecting to Wareshare: {}:{}".format(self.wareshare_ip, self.wareshare_port))
-        self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
+        # self.wareshare_ip = rospy.get_param("~wareshare_ip", "192.168.1.200")
+        # self.wareshare_port = rospy.get_param("~wareshare_port", 502)
+        # rospy.loginfo("Connecting to Wareshare: {}:{}".format(self.wareshare_ip, self.wareshare_port))
+        # self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
 
         self.lift_msg = Int8Stamped()
         self.disable_qr_code_msg = Int8Stamped()
@@ -1441,7 +1441,7 @@ class PassboxAction(object):
                 if self.plc.read_slave(1,place_or_pick_state,1) == 1:
                     self.plc.write_slave(1,open_barie_dirty_side, [1])
                 if self.plc.read_slave(1,barie_state, 1) == 2:
-                    _state = MainState.GO_OUT_TO_WAITINNG
+                    _state = MainState.SEND_GO_OUT_TO_WAITINNG
                 if self._asm.pause_req:
                     self._asm.reset_flag()
                     self.moving_control_run_pause_pub.publish(
@@ -1483,7 +1483,7 @@ class PassboxAction(object):
             # .##....##..##.....##.........##.....##.##.....##....##............##.....##.##.....##....##....##.......##.....##.##.....##.##...###
             # ..######....#######..#######..#######...#######.....##....#######.##.....##.##.....##....##....########.##.....##.##.....##.##....##
             # State: GOING_TO_OUT_OF_HUB
-            elif _state == MainState.GOING_TO_OUT_OF_HUB:
+            elif _state == MainState.GO_OUT_TO_WAITINNG:
                 if direction == FORWARD:
                     if self.enable_safety:
                         self.safety_job_name = safety_job_undocking_backward

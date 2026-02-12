@@ -100,9 +100,6 @@ class MainState(EnumString):
     NONE = -1
     SEND_DOCKING_HUB = 0
     DOCKING_TO_HUB = 1
-    CHECK_CART = 2
-    LIFT_MAX = 3
-    LIFT_MIN = 4
     DONE = 8
     MOVING_ERROR = 10
     PAUSED = 12
@@ -113,69 +110,42 @@ class MainState(EnumString):
     GOING_TO_OUT_OF_HUB = 24
     MOVING_DISCONNECTED = 28
     INIT = 29
-    LIFT_POSITION_WRONG = 30
     NO_CART = 31
     OPTICAL_SENSOR_ERROR = 32
     EMG_AGV = 33
     ALIGNMENT_SENSOR = 35
-    LIFT_MIN_END = 36
-    LIFT_MIN_FIRST = 37
-    LIFT_MAX_FIRST = 38
-    UNABLE_PLACE_CART = 47
-    WRONG_CART = 48
     PAUSED_BY_PASSBOX = 49
     COLLISION_POSSIBLE = 50
     EMG_PASSBOX = 60
     TIMEOUT_WHEN_WAIT_PASSBOX_ALLOW_MOVE = 70
     NETWORK_ERROR = 71
-    OPEN_BARIE = 81
-    REQUEST_ENTER_LIFT = 82
-    ENTER_LIFT = 83
-    LIFT_AGV = 84
-    PLACE_AGV = 85
     REQUEST_ENTER_PASSBOX = 86
-    GO_OUT_TO_WAITINNG = 87
-    SEND_GO_OUT_TO_WAITINNG = 88
+    REQUEST_EXIT_PASSBOX = 87
+    GO_OUT_TO_WAITINNG = 88
+    SEND_GO_OUT_TO_WAITINNG = 89
 
-PICK = 1
-PLACE = 0
 ON = 1
 OFF = 0
-LIFT_UP = 1
-LIFT_DOWN = 2
 FORWARD = 1
 BACKWARD = 0
 ######################
 ###PASS_BOX###
-# INPUT PLC, OUTPUT AGV
-open_dirty_side = 200
-open_clean_side = 201
-# OUTPUT PLC, INPUT AGV
-done_open_dirty_side = 200
-done_open_clean_side = 201
-had_cart_in_hub =  202
-emg_passbox = 203
-
-######################
-###Bộ nâng hạ###
-# INPUT PLC, OUTPUT AGV
-emg_agv_request = 1
-place_agv_request = 2
-pick_agv_request = 3
-close_barie_dirty_side = 4
-open_barie_dirty_side = 5
-agv_going_passbox = 6
-emg_agv = 7
-safety_off = 8
-# OUTPUT PLC, INPUT AGV
-position_state = 1 
-place_or_pick_state = 2
-barie_state = 3
-error_state = 4
-light_curtain_state = 5
-error_code_1 = 6
-error_code_2 = 7
-mode_ban_nang_ha = 8
+# INPUT WARESHARE, OUTPUT AGV
+open_dirty_side = 1
+close_dirty_side = 2
+pause_dirty_side = 3
+emg_when_dirty_side = 4
+open_clean_side = 5
+close_clean_side = 6
+pause_clean_side = 7
+emg_when_clean_side = 8
+# OUTPUT WARESHARE, INPUT AGV
+done_open_dirty_side = 2
+done_close_dirty_side = 1
+done_open_clean_side = 4
+done_close_clean_side = 3
+emg_dirty_side =  5
+emg_clean_side = 6
 
 class PassboxAction(object):
     _feedback = StringFeedback()
@@ -276,10 +246,6 @@ class PassboxAction(object):
         self.liftup_finish = False
         self.detect_vrack = False
         self.liftdown_finish = False
-        self.plc_ip = rospy.get_param("~plc_ip", "192.168.3.250")
-        self.plc_port = rospy.get_param("~plc_port", 502)
-        rospy.loginfo("Connecting to PLC: {}:{}".format(self.plc_ip, self.plc_port))
-        self.plc = modbus_tcp_passbox.ModbusTcpClient(self.plc_ip, self.plc_port,timeout=3.0)
 
         self.wareshare_ip = rospy.get_param("~wareshare_ip", "192.168.1.200")
         self.wareshare_port = rospy.get_param("~wareshare_port", 502)
@@ -320,24 +286,10 @@ class PassboxAction(object):
         self.db = None  # Database instance - needs proper initialization if used
 
     def check_connected(self):
-        return self.plc.is_connected() and self.wareshare.is_connected()
-    
-    def read_wareshare(self):
-        self.wareshare = ModbusTcpClient(self.wareshare_ip, self.wareshare_port)
-        self.wareshare.connect()
-        rr = self.wareshare.read_discrete_inputs(0, 8, unit=1)
-        if rr.isError():
-            print("Read error:", rr)
-            return None
-        bits = [1 if b else 0 for b in rr.bits[:8]]
-        return bits
-
-    def read_error_plc(self):
-        pass
+        return self.wareshare.is_connected()    
 
     def shutdown(self):
         if self.check_connected():
-            self.plc.close()
             self.wareshare.close()
         self.dynamic_reconfig_movebase(self.vel_move_base, True)
         self.moving_control_client.cancel_all_goals()
@@ -504,8 +456,8 @@ class PassboxAction(object):
             hub_pose_y = data_dict["params"]["position"]["y"]
             waiting_pose_x = data_dict["params"]["waiting_position"]["x"]
             waiting_pose_y = data_dict["params"]["waiting_position"]["y"]
-            lift_pose_x = data_dict["params"]["lift_position"]["x"]
-            lift_pose_y = data_dict["params"]["lift_position"]["y"]
+            after_docking_pose_x = data_dict["params"]["after_docking_position"]["x"]
+            after_docking_pose_y = data_dict["params"]["after_docking_position"]["y"]
             self.type = "PASSBOX"
             self.name = data_dict["params"]["name"]
             self.cell = 0  # data_dict["params"]["cell"]
@@ -518,8 +470,8 @@ class PassboxAction(object):
                 if "Invert" in data_dict["params"]["properties"]:
                     direction = data_dict["params"]["properties"]["invert"]
 
-                if "Non_equal" in data_dict["params"]["properties"]:
-                    self.non_equal = data_dict["params"]["properties"]["Non_equal"]
+                if "dirty_or_clean" in data_dict["params"]["properties"]:
+                    self.dirty_or_clean = data_dict["params"]["properties"]["dirty_or_clean"]
         except:
             hub_pose_x = data_dict["params"]["position"]["position"]["x"]
             hub_pose_y = data_dict["params"]["position"]["position"]["y"]
@@ -539,26 +491,6 @@ class PassboxAction(object):
             cur_orient = atan2(
                 lift_pose_y - hub_pose_y, lift_pose_x - hub_pose_x
             )
-
-        # ============================================================
-        # CALCULATE LIFT GOAL
-        # ============================================================
-        lift_goal = StringGoal()
-        lift_pose = self.calculate_pose_offset(
-            0,
-            lift_pose_x,
-            lift_pose_y,
-            cur_orient,
-        )
-        lift_path_dict["waypoints"][0]["position"] = copy.deepcopy(
-            obj_to_dict(lift_pose, return_pose_dict)
-        )
-        lift_goal.data = json.dumps(lift_path_dict, indent=2)
-        rospy.logwarn(
-            "Lift goal position:\n{}".format(
-                json.dumps(lift_path_dict, indent=2)
-            )
-        )
         # ============================================================
         # CALCULATE WAITING GOAL
         # ============================================================
@@ -590,7 +522,7 @@ class PassboxAction(object):
             cur_orient,
         )
         docking_path_dict["waypoints"][0]["position"] = copy.deepcopy(
-            obj_to_dict(lift_pose, return_pose_dict)
+            obj_to_dict(waiting_pose, return_pose_dict)
         )
         docking_path_dict["waypoints"][1]["position"] = copy.deepcopy(
             obj_to_dict(docking_pose, return_pose_dict)
@@ -611,7 +543,7 @@ class PassboxAction(object):
         )
 
         undocking_path_dict["waypoints"][1]["position"] = copy.deepcopy(
-            obj_to_dict(lift_pose, return_pose_dict)
+            obj_to_dict(after_docking_pose, return_pose_dict)
         )
         if "param_test" not in undocking_path_dict:
             undocking_path_dict["param_test"] = {}
@@ -624,15 +556,7 @@ class PassboxAction(object):
                 (json.dumps(undocking_path_dict, indent=2))
             )
         )
-
-        pick_or_place = data_dict["params"]["pick_or_place"]
-        if pick_or_place:
-            goal_type = PICK
-            _state = MainState.INIT
-        else:
-            goal_type = PLACE
-            _state = MainState.WAIT_RESET_IO
-
+        _state = MainState.INIT
         r = rospy.Rate(15)
         success = False
         _prev_state = MainState.NONE
@@ -757,7 +681,6 @@ class PassboxAction(object):
                         )
                         rospy.sleep(0.1)
                         self.pub_continue_run.publish(self.data_run)
-
             # ============================================================
             # State: WAIT_RESET_IO
             # ============================================================
@@ -894,58 +817,6 @@ class PassboxAction(object):
                     self._asm.reset_flag()
                     _state = _state_bf_error
                     self.moving_control_error_code = ""
-
-            # """
-            # .##.......####.########.########.........##.....##.####.##....##.........########.####.########...######..########
-            # .##........##..##..........##............###...###..##..###...##.........##........##..##.....##.##....##....##...
-            # .##........##..##..........##............####.####..##..####..##.........##........##..##.....##.##..........##...
-            # .##........##..######......##............##.###.##..##..##.##.##.........######....##..########...######.....##...
-            # .##........##..##..........##............##.....##..##..##..####.........##........##..##...##.........##....##...
-            # .##........##..##..........##............##.....##..##..##...###.........##........##..##....##..##....##....##...
-            # .########.####.##..........##....#######.##.....##.####.##....##.#######.##.......####.##.....##..######.....##...
-            # """
-            # State: LIFT_MIN_FIRST
-            elif _state == MainState.LIFT_MIN_FIRST:
-                if self.liftdown_finish:
-                    _state = MainState.REQUEST_ENTER_PASSBOX
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_DOWN
-                    self.pub_lift_cmd.publish(self.lift_msg)
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            # """
-            # .##.......####.########.########.........##.....##....###....##.....##.........########.####.########...######..########
-            # .##........##..##..........##............###...###...##.##....##...##..........##........##..##.....##.##....##....##...
-            # .##........##..##..........##............####.####..##...##....##.##...........##........##..##.....##.##..........##...
-            # .##........##..######......##............##.###.##.##.....##....###............######....##..########...######.....##...
-            # .##........##..##..........##............##.....##.#########...##.##...........##........##..##...##.........##....##...
-            # .##........##..##..........##............##.....##.##.....##..##...##..........##........##..##....##..##....##....##...
-            # .########.####.##..........##....#######.##.....##.##.....##.##.....##.#######.##.......####.##.....##..######.....##...
-            # """
-
-            # State: LIFT_MAX_FIRST
-
-            elif _state == MainState.LIFT_MAX_FIRST:
-                if self.liftup_finish:
-                    _state = MainState.REQUEST_ENTER_PASSBOX
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_UP
-                    self.pub_lift_cmd.publish(self.lift_msg)
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            # """
             # .########..########..#######..##.....##.########..######..########.........########.##....##.########.########.########.........########.....###.....######...######..########...#######..##.....##
             # .##.....##.##.......##.....##.##.....##.##.......##....##....##............##.......###...##....##....##.......##.....##....##.....##...##.##...##....##.##....##.##.....##.##.....##.##.....##
             # .##.....##.##.......##.....##.##.....##.##.......##..........##............##.......####..##....##....##.......##.....##....##.....##..##...##..##.......##.......##.....##.##.....##.##.....##
@@ -957,18 +828,18 @@ class PassboxAction(object):
             # State: REQUEST_ENTER_PASSBOX 
             elif _state == MainState.REQUEST_ENTER_PASSBOX:  
                 if self.dirty_or_clean:     
-                    if self.plc.read_slave(1,done_open_dirty_side,1) != 1:
-                        self.plc.write_slave(1,open_dirty_side,[1])
-                        if self.plc.write_slave(1,open_dirty_side,[1]) == False:
+                    if self.wareshare.read_coils(done_open_dirty_side,1,1) != 1:
+                        self.wareshare.write_coils(open_dirty_side,[1],1)
+                        if self.wareshare.write_coils(open_dirty_side,[1],1) == False:
                             _state = MainState.NETWORK_ERROR
-                    elif self.plc.read_slave(1,done_open_dirty_side,1) == 1:
+                    elif self.wareshare.read_coils(done_open_dirty_side,1,1) == 1:
                         _state = MainState.SEND_DOCKING_HUB
                 else: 
-                    if self.plc.read_slave(1,done_open_clean_side,1) != 1:
-                        self.plc.write_slave(1,open_clean_side,[1])
-                        if self.plc.write_slave(1,open_clean_side,[1]) == False:
+                    if self.wareshare.read_coils(done_open_clean_side,1,1) != 1:
+                        self.wareshare.write_coils(open_clean_side,[1],1)
+                        if self.wareshare.write_coils(open_clean_side,[1],1) == False:
                             _state = MainState.NETWORK_ERROR
-                    elif self.plc.read_slave(1,done_open_clean_side,1) == 1:
+                    elif self.wareshare.read_coils(done_open_clean_side,1,1) == 1:
                         _state = MainState.SEND_DOCKING_HUB
                 if self._asm.pause_req:
                     self._asm.reset_flag()
@@ -1091,7 +962,7 @@ class PassboxAction(object):
                             self.moving_control_client.cancel_all_goals()
                             continue
                 if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    _state = MainState.CHECK_CART
+                    _state = MainState.REQUEST_EXIT_PASSBOX
                     continue
                 elif (
                     self.moving_control_result != GoalStatus.SUCCEEDED
@@ -1123,100 +994,23 @@ class PassboxAction(object):
                     _state_when_pause = _state
                     _state = MainState.PAUSED
                     continue
-            # """
-            # ..######..##.....##.########..######..##....##..........######.....###....########..########
-            # .##....##.##.....##.##.......##....##.##...##..........##....##...##.##...##.....##....##...
-            # .##.......##.....##.##.......##.......##..##...........##........##...##..##.....##....##...
-            # .##.......#########.######...##.......#####............##.......##.....##.########.....##...
-            # .##.......##.....##.##.......##.......##..##...........##.......#########.##...##......##...
-            # .##....##.##.....##.##.......##....##.##...##..........##....##.##.....##.##....##.....##...
-            # ..######..##.....##.########..######..##....##.#######..######..##.....##.##.....##....##...
-            # """
-            # State: CHECK_CART
-            elif _state == MainState.CHECK_CART:
-                if goal_type == PICK:
-                    _state = MainState.LIFT_MAX
-                else:
-                    _state = MainState.LIFT_MIN
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            # """
-            # .##.......####.########.########.........##.....##....###....##.....##
-            # .##........##..##..........##............###...###...##.##....##...##.
-            # .##........##..##..........##............####.####..##...##....##.##..
-            # .##........##..######......##............##.###.##.##.....##....###...
-            # .##........##..##..........##............##.....##.#########...##.##..
-            # .##........##..##..........##............##.....##.##.....##..##...##.
-            # .########.####.##..........##....#######.##.....##.##.....##.##.....##
-            # """
-            # State: LIFT_MAX
-            elif _state == MainState.LIFT_MAX:
-                if self.liftup_finish:
-                    if self.server_config != None:
-                        if self.upDateCart(
-                            self.type, self.name, self.cell, "", ""
-                        ) and self.upDateCart(
-                            "AGV", self.data, 0, self.cart, self.lot
-                        ):
-                            rospy.sleep(1)
-                            _state = MainState.SEND_GOTO_OUT_OF_HUB
-                        else:
-                            rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
-                    else:
-                        rospy.sleep(1)
+
+            # State: REQUEST_EXIT_PASSBOX
+            elif _state == MainState.REQUEST_EXIT_PASSBOX:
+                if self.dirty_or_clean:     
+                    if self.wareshare.read_coils(done_open_clean_side,1,1) != 1:
+                        self.wareshare.write_coils(open_clean_side,[1],1)
+                        if self.wareshare.write_coils(open_clean_side,[1],1) == False:
+                            _state = MainState.NETWORK_ERROR
+                    elif self.wareshare.read_coils(done_open_clean_side,1,1) == 1:
                         _state = MainState.SEND_GOTO_OUT_OF_HUB
-                    if self.lot == "":
-                        self.db.saveStatusCartData(
-                            "status_cart", "have_empty_cart"
-                        )
-                    else:
-                        self.db.saveStatusCartData(
-                            "status_cart", "have_full_cart"
-                        )
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_UP
-                    self.pub_lift_cmd.publish(self.lift_msg)
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            # """
-            # .##.......####.########.########.........##.....##.####.##....##
-            # .##........##..##..........##............###...###..##..###...##
-            # .##........##..##..........##............####.####..##..####..##
-            # .##........##..######......##............##.###.##..##..##.##.##
-            # .##........##..##..........##............##.....##..##..##..####
-            # .##........##..##..........##............##.....##..##..##...###
-            # .########.####.##..........##....#######.##.....##.####.##....##
-            # """
-            # State: LIFT_MIN
-            elif _state == MainState.LIFT_MIN:
-                if self.liftdown_finish:
-                    if self.server_config != None:
-                        if self.upDateCart(
-                            self.type, self.name, self.cell, self.cart, self.lot
-                        ) and self.upDateCart("AGV", self.data, 0, "", ""):
-                            rospy.sleep(1)
-                            _state = MainState.SEND_GOTO_OUT_OF_HUB
-                        else:
-                            rospy.logwarn("UPDATE_CART_ERROR --> RETRY")
-                    else:
-                        rospy.sleep(1)
+                else: 
+                    if self.wareshare.read_coils(done_open_dirty_side,1,1) != 1:
+                        self.wareshare.write_coils(open_dirty_side,[1],1)
+                        if self.wareshare.write_coils(open_dirty_side,[1],1) == False:
+                            _state = MainState.NETWORK_ERROR
+                    elif self.wareshare.read_coils(done_open_dirty_side,1,1) == 1:
                         _state = MainState.SEND_GOTO_OUT_OF_HUB
-                    self.db.saveStatusCartData("status_cart", "no_cart")
-                else:
-                    self.lift_msg.stamp = rospy.Time.now()
-                    self.lift_msg.data = LIFT_DOWN
-                    self.pub_lift_cmd.publish(self.lift_msg)
                 if self._asm.pause_req:
                     self._asm.reset_flag()
                     self.moving_control_run_pause_pub.publish(
@@ -1224,6 +1018,7 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
+
              #####..#######.#.....#.######......#####..#######....#######.#.....#.#######.
             #.....#.#.......##....#.#.....#....#.....#.#.....#....#.....#.#.....#....#....
             #.......#.......#.#...#.#.....#....#.......#.....#....#.....#.#.....#....#....
@@ -1246,126 +1041,6 @@ class PassboxAction(object):
                     )
                     _state_when_pause = _state
                     _state = MainState.PAUSED
-
-
-            # ..######....#######...........#######..##.....##.########.........##.....##....###....########.########.##.....##....###....##....##
-            # .##....##..##.....##.........##.....##.##.....##....##............###...###...##.##......##....##.......##.....##...##.##...###...##
-            # .##........##.....##.........##.....##.##.....##....##............####.####..##...##.....##....##.......##.....##..##...##..####..##
-            # .##...####.##.....##.........##.....##.##.....##....##............##.###.##.##.....##....##....######...#########.##.....##.##.##.##
-            # .##....##..##.....##.........##.....##.##.....##....##............##.....##.#########....##....##.......##.....##.#########.##..####
-            # .##....##..##.....##.........##.....##.##.....##....##............##.....##.##.....##....##....##.......##.....##.##.....##.##...###
-            # ..######....#######..#######..#######...#######.....##....#######.##.....##.##.....##....##....########.##.....##.##.....##.##....##
-            # State: GOING_TO_OUT_OF_HUB
-            elif _state == MainState.GOING_TO_OUT_OF_HUB:
-                if direction == FORWARD:
-                    if self.enable_safety:
-                        self.safety_job_name = safety_job_undocking_backward
-                    else:
-                        self.safety_job_name = ""
-                else:
-                    if self.enable_safety:
-                        self.safety_job_name = safety_job_undocking_forward
-                    else:
-                        self.safety_job_name = ""
-
-                if enable_check_error_when_docking:
-                    if abs(distance_to_hub) < dist_check_go_out:
-                        disable_auto_get_center_tape = True
-                        self.get_first_time_error = True
-                        if (
-                            abs(self.error_angle) >= max_error_angle_in_hub
-                            or abs(self.error_position)
-                            >= max_error_position_in_hub
-                        ):
-                            _state_bf_error = MainState.SEND_DOCKING_HUB
-                            _state_when_error = _state
-                            _state = MainState.COLLISION_POSSIBLE
-                            self.moving_control_client.cancel_all_goals()
-                            continue
-
-                if self.moving_control_result == GoalStatus.SUCCEEDED:
-                    if self.dirty_or_clean:
-                        _state = MainState.PLACE_AGV
-                    else:
-                        _state = MainState.DONE
-                elif (
-                    self.moving_control_result != GoalStatus.SUCCEEDED
-                    and self.moving_control_result != GoalStatus.ACTIVE
-                    and self.moving_control_result != -1
-                ) or self.moving_control_error_code != "":
-                    rospy.logerr(
-                        "Go to waiting fail: {}".format(
-                            GoalStatus.to_string(self.moving_control_result)
-                        )
-                    )
-                    _state_bf_error = MainState.SEND_GOTO_OUT_OF_HUB
-                    _state_when_error = _state
-                    _state = MainState.MOVING_ERROR
-                if rospy.get_time() - self.last_moving_control_fb >= 5.0:
-                    rospy.logerr("/moving control disconnected!")
-                    self.send_feedback(
-                        self._as, GoalStatus.to_string(GoalStatus.ABORTED)
-                    )
-                    _state_bf_error = MainState.SEND_GOTO_OUT_OF_HUB
-                    _state_when_error = _state
-                    _state = MainState.MOVING_DISCONNECTED
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-            ######..#..........#.....#####..#######.......#.....#####..#.....#.
-            #.....#.#.........#.#...#.....#.#............#.#...#.....#.#.....#.
-            #.....#.#........#...#..#.......#...........#...#..#.......#.....#.
-            ######..#.......#.....#.#.......#####......#.....#.#..####.#.....#.
-            #.......#.......#######.#.......#..........#######.#.....#..#...#..
-            #.......#.......#.....#.#.....#.#..........#.....#.#.....#...#.#...
-            #.......#######.#.....#..#####..#######....#.....#..#####.....#....
-            # State: PLACE_AGV 
-            elif _state == MainState.PLACE_AGV:
-                if self.plc.read_slave(1,place_or_pick_state,1) != 1:
-                    self.plc.write_slave(1,place_agv_request,[1])
-                    if self.plc.write_slave(1,place_agv_request,[1]) == False:
-                        _state = MainState.NETWORK_ERROR
-                if self.plc.read_slave(1,place_or_pick_state,1) == 1:
-                    self.plc.write_slave(1,open_barie_dirty_side, [1])
-                if self.plc.read_slave(1,barie_state, 1) == 2:
-                    _state = MainState.GO_OUT_TO_WAITINNG
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED  
-             #####..#######....#######.#.....#.#######.
-            #.....#.#.....#....#.....#.#.....#....#....
-            #.......#.....#....#.....#.#.....#....#....
-            #..####.#.....#....#.....#.#.....#....#....
-            #.....#.#.....#....#.....#.#.....#....#....
-            #.....#.#.....#....#.....#.#.....#....#....
-             #####..#######....#######..#####.....#....
-
-                        # State: SEND_GO_OUT_TO_WAITINNG 
-            elif _state == MainState.SEND_GO_OUT_TO_WAITINNG:
-                self.moving_control_client.send_goal(
-                    waiting_goal,
-                    feedback_cb=self.moving_control_fb,
-                )
-                self.moving_control_result = -1
-                self.last_moving_control_fb = rospy.get_time()
-                _state = MainState.DONE
-                if self._asm.pause_req:
-                    self._asm.reset_flag()
-                    self.moving_control_run_pause_pub.publish(
-                        StringStamped(stamp=rospy.Time.now(), data="PAUSE")
-                    )
-                    _state_when_pause = _state
-                    _state = MainState.PAUSED
-
-
             # ..######....#######...........#######..##.....##.########.........##.....##....###....########.########.##.....##....###....##....##
             # .##....##..##.....##.........##.....##.##.....##....##............###...###...##.##......##....##.......##.....##...##.##...###...##
             # .##........##.....##.........##.....##.##.....##....##............####.####..##...##.....##....##.......##.....##..##...##..####..##
